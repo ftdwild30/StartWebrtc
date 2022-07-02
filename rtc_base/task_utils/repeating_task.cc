@@ -10,73 +10,118 @@
 
 #include "rtc_base/task_utils/repeating_task.h"
 
+#include "absl/functional/any_invocable.h"
 #include "absl/memory/memory.h"
+#include "api/task_queue/pending_task_safety_flag.h"
+#include "api/task_queue/to_queued_task.h"
 #include "rtc_base/logging.h"
-#include "rtc_base/task_utils/to_queued_task.h"
 #include "rtc_base/time_utils.h"
 
 namespace webrtc {
-namespace webrtc_repeating_task_impl {
-RepeatingTaskBase::RepeatingTaskBase(TaskQueueBase* task_queue,
-                                     TimeDelta first_delay)
+namespace {
+
+class RepeatingTask : public QueuedTask {
+ public:
+  RepeatingTask(TaskQueueBase* task_queue,
+                TaskQueueBase::DelayPrecision precision,
+                TimeDelta first_delay,
+                absl::AnyInvocable<TimeDelta()> task,
+                Clock* clock,
+                rtc::scoped_refptr<PendingTaskSafetyFlag> alive_flag);
+  ~RepeatingTask() override = default;
+
+ private:
+  bool Run() final;
+
+  TaskQueueBase* const task_queue_;
+  const TaskQueueBase::DelayPrecision precision_;
+  Clock* const clock_;
+  absl::AnyInvocable<TimeDelta()> task_;
+  // This is always finite.
+  Timestamp next_run_time_ RTC_GUARDED_BY(task_queue_);
+  rtc::scoped_refptr<PendingTaskSafetyFlag> alive_flag_
+      RTC_GUARDED_BY(task_queue_);
+};
+
+RepeatingTask::RepeatingTask(
+    TaskQueueBase* task_queue,
+    TaskQueueBase::DelayPrecision precision,
+    TimeDelta first_delay,
+    absl::AnyInvocable<TimeDelta()> task,
+    Clock* clock,
+    rtc::scoped_refptr<PendingTaskSafetyFlag> alive_flag)
     : task_queue_(task_queue),
-      next_run_time_(Timestamp::Micros(rtc::TimeMicros()) + first_delay) {}
+      precision_(precision),
+      clock_(clock),
+      task_(std::move(task)),
+      next_run_time_(clock_->CurrentTime() + first_delay),
+      alive_flag_(std::move(alive_flag)) {}
 
-RepeatingTaskBase::~RepeatingTaskBase() = default;
-
-bool RepeatingTaskBase::Run() {
+bool RepeatingTask::Run() {
   RTC_DCHECK_RUN_ON(task_queue_);
   // Return true to tell the TaskQueue to destruct this object.
-  if (next_run_time_.IsPlusInfinity())
+  if (!alive_flag_->alive())
     return true;
 
-  TimeDelta delay = RunClosure();
+  webrtc_repeating_task_impl::RepeatingTaskImplDTraceProbeRun();
+  TimeDelta delay = task_();
+  RTC_DCHECK_GE(delay, TimeDelta::Zero());
 
-  // The closure might have stopped this task, in which case we return true to
-  // destruct this object.
-  if (next_run_time_.IsPlusInfinity())
+  // A delay of +infinity means that the task should not be run again.
+  // Alternatively, the closure might have stopped this task. In either which
+  // case we return true to destruct this object.
+  if (delay.IsPlusInfinity() || !alive_flag_->alive())
     return true;
 
-  RTC_DCHECK(delay.IsFinite());
-  TimeDelta lost_time = Timestamp::Micros(rtc::TimeMicros()) - next_run_time_;
+  TimeDelta lost_time = clock_->CurrentTime() - next_run_time_;
   next_run_time_ += delay;
   delay -= lost_time;
   delay = std::max(delay, TimeDelta::Zero());
 
-  task_queue_->PostDelayedTask(absl::WrapUnique(this), delay.ms());
+  task_queue_->PostDelayedTaskWithPrecision(precision_, absl::WrapUnique(this),
+                                            delay.ms());
 
   // Return false to tell the TaskQueue to not destruct this object since we
   // have taken ownership with absl::WrapUnique.
   return false;
 }
 
-void RepeatingTaskBase::Stop() {
-  RTC_DCHECK(next_run_time_.IsFinite());
-  next_run_time_ = Timestamp::PlusInfinity();
+}  // namespace
+
+RepeatingTaskHandle RepeatingTaskHandle::Start(
+    TaskQueueBase* task_queue,
+    absl::AnyInvocable<TimeDelta()> closure,
+    TaskQueueBase::DelayPrecision precision,
+    Clock* clock) {
+  auto alive_flag = PendingTaskSafetyFlag::CreateDetached();
+  webrtc_repeating_task_impl::RepeatingTaskHandleDTraceProbeStart();
+  task_queue->PostTask(
+      std::make_unique<RepeatingTask>(task_queue, precision, TimeDelta::Zero(),
+                                      std::move(closure), clock, alive_flag));
+  return RepeatingTaskHandle(std::move(alive_flag));
 }
 
-}  // namespace webrtc_repeating_task_impl
-
-RepeatingTaskHandle::RepeatingTaskHandle(RepeatingTaskHandle&& other)
-    : repeating_task_(other.repeating_task_) {
-  other.repeating_task_ = nullptr;
+// DelayedStart is equivalent to Start except that the first invocation of the
+// closure will be delayed by the given amount.
+RepeatingTaskHandle RepeatingTaskHandle::DelayedStart(
+    TaskQueueBase* task_queue,
+    TimeDelta first_delay,
+    absl::AnyInvocable<TimeDelta()> closure,
+    TaskQueueBase::DelayPrecision precision,
+    Clock* clock) {
+  auto alive_flag = PendingTaskSafetyFlag::CreateDetached();
+  webrtc_repeating_task_impl::RepeatingTaskHandleDTraceProbeDelayedStart();
+  task_queue->PostDelayedTaskWithPrecision(
+      precision,
+      std::make_unique<RepeatingTask>(task_queue, precision, first_delay,
+                                      std::move(closure), clock, alive_flag),
+      first_delay.ms());
+  return RepeatingTaskHandle(std::move(alive_flag));
 }
-
-RepeatingTaskHandle& RepeatingTaskHandle::operator=(
-    RepeatingTaskHandle&& other) {
-  repeating_task_ = other.repeating_task_;
-  other.repeating_task_ = nullptr;
-  return *this;
-}
-
-RepeatingTaskHandle::RepeatingTaskHandle(
-    webrtc_repeating_task_impl::RepeatingTaskBase* repeating_task)
-    : repeating_task_(repeating_task) {}
 
 void RepeatingTaskHandle::Stop() {
   if (repeating_task_) {
-    RTC_DCHECK_RUN_ON(repeating_task_->task_queue_);
-    repeating_task_->Stop();
+    repeating_task_->SetNotAlive();
     repeating_task_ = nullptr;
   }
 }
@@ -85,4 +130,11 @@ bool RepeatingTaskHandle::Running() const {
   return repeating_task_ != nullptr;
 }
 
+namespace webrtc_repeating_task_impl {
+// These methods are empty, but can be externally equipped with actions using
+// dtrace.
+void RepeatingTaskHandleDTraceProbeStart() {}
+void RepeatingTaskHandleDTraceProbeDelayedStart() {}
+void RepeatingTaskImplDTraceProbeRun() {}
+}  // namespace webrtc_repeating_task_impl
 }  // namespace webrtc

@@ -9,7 +9,8 @@
  */
 
 #include "modules/video_coding/frame_buffer2.h"
-#include "modules/video_coding/timing.h"
+#include "modules/video_coding/timing/timing.h"
+#include "test/scoped_key_value_config.h"
 #include "test/time_controller/simulated_time_controller.h"
 
 namespace webrtc {
@@ -49,7 +50,7 @@ struct DataReader {
   size_t offset_ = 0;
 };
 
-class FuzzyFrameObject : public video_coding::EncodedFrame {
+class FuzzyFrameObject : public EncodedFrame {
  public:
   FuzzyFrameObject() {}
   ~FuzzyFrameObject() {}
@@ -68,20 +69,21 @@ void FuzzOneInput(const uint8_t* data, size_t size) {
   rtc::TaskQueue task_queue(
       time_controller.GetTaskQueueFactory()->CreateTaskQueue(
           "time_tq", TaskQueueFactory::Priority::NORMAL));
-  VCMTiming timing(time_controller.GetClock());
+  test::ScopedKeyValueConfig field_trials;
+  VCMTiming timing(time_controller.GetClock(), field_trials);
   video_coding::FrameBuffer frame_buffer(time_controller.GetClock(), &timing,
-                                         nullptr);
+                                         nullptr, field_trials);
 
   bool next_frame_task_running = false;
 
   while (reader.MoreToRead()) {
     if (reader.GetNum<uint8_t>() % 2) {
       std::unique_ptr<FuzzyFrameObject> frame(new FuzzyFrameObject());
-      frame->id.picture_id = reader.GetNum<int64_t>();
-      frame->id.spatial_layer = reader.GetNum<uint8_t>() % 5;
+      frame->SetId(reader.GetNum<int64_t>());
+      frame->SetSpatialIndex(reader.GetNum<uint8_t>() % 5);
       frame->SetTimestamp(reader.GetNum<uint32_t>());
-      frame->num_references = reader.GetNum<uint8_t>() %
-                              video_coding::EncodedFrame::kMaxFrameReferences;
+      frame->num_references =
+          reader.GetNum<uint8_t>() % EncodedFrame::kMaxFrameReferences;
 
       for (size_t r = 0; r < frame->num_references; ++r)
         frame->references[r] = reader.GetNum<int64_t>();
@@ -97,9 +99,7 @@ void FuzzOneInput(const uint8_t* data, size_t size) {
                              max_wait_time_ms] {
           frame_buffer.NextFrame(
               max_wait_time_ms, keyframe_required, &task_queue,
-              [&next_frame_task_running](
-                  std::unique_ptr<video_coding::EncodedFrame> frame,
-                  video_coding::FrameBuffer::ReturnReason res) {
+              [&next_frame_task_running](std::unique_ptr<EncodedFrame> frame) {
                 next_frame_task_running = false;
               });
         });

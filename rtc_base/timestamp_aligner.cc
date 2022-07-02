@@ -23,15 +23,22 @@ TimestampAligner::TimestampAligner()
     : frames_seen_(0),
       offset_us_(0),
       clip_bias_us_(0),
-      prev_translated_time_us_(std::numeric_limits<int64_t>::min()) {}
+      prev_translated_time_us_(std::numeric_limits<int64_t>::min()),
+      prev_time_offset_us_(0) {}
 
 TimestampAligner::~TimestampAligner() {}
 
 int64_t TimestampAligner::TranslateTimestamp(int64_t capturer_time_us,
                                              int64_t system_time_us) {
-  return ClipTimestamp(
+  const int64_t translated_timestamp = ClipTimestamp(
       capturer_time_us + UpdateOffset(capturer_time_us, system_time_us),
       system_time_us);
+  prev_time_offset_us_ = translated_timestamp - capturer_time_us;
+  return translated_timestamp;
+}
+
+int64_t TimestampAligner::TranslateTimestamp(int64_t capturer_time_us) const {
+  return capturer_time_us + prev_time_offset_us_;
 }
 
 int64_t TimestampAligner::UpdateOffset(int64_t capturer_time_us,
@@ -81,7 +88,7 @@ int64_t TimestampAligner::UpdateOffset(int64_t capturer_time_us,
   // offset, the filter is reset. This could happen, e.g., if the
   // capturer's clock is reset, cameras are plugged in and out, or
   // the application process is temporarily suspended. Expected to
-  // happen for the very first timestamp (|frames_seen_| = 0). The
+  // happen for the very first timestamp (`frames_seen_` = 0). The
   // threshold of 300 ms should make this unlikely in normal
   // operation, and at the same time, converging gradually rather than
   // resetting the filter should be tolerable for jumps in capturer's time
@@ -117,10 +124,10 @@ int64_t TimestampAligner::ClipTimestamp(int64_t filtered_time_us,
     time_us = prev_translated_time_us_ + kMinFrameIntervalUs;
     if (time_us > system_time_us) {
       // In the anomalous case that this function is called with values of
-      // |system_time_us| less than |kMinFrameIntervalUs| apart, we may output
+      // `system_time_us` less than `kMinFrameIntervalUs` apart, we may output
       // timestamps with with too short inter-frame interval. We may even return
       // duplicate timestamps in case this function is called several times with
-      // exactly the same |system_time_us|.
+      // exactly the same `system_time_us`.
       RTC_LOG(LS_WARNING) << "too short translated timestamp interval: "
                              "system time (us) = "
                           << system_time_us << ", interval (us) = "

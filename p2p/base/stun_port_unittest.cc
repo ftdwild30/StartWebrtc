@@ -20,6 +20,7 @@
 #include "rtc_base/ssl_adapter.h"
 #include "rtc_base/virtual_socket_server.h"
 #include "test/gmock.h"
+#include "test/scoped_key_value_config.h"
 
 using cricket::ServerAddresses;
 using rtc::SocketAddress;
@@ -48,11 +49,9 @@ class StunPortTestBase : public ::testing::Test, public sigslot::has_slots<> {
       : ss_(new rtc::VirtualSocketServer()),
         thread_(ss_.get()),
         network_("unittest", "unittest", kLocalAddr.ipaddr(), 32),
-        socket_factory_(rtc::Thread::Current()),
-        stun_server_1_(cricket::TestStunServer::Create(rtc::Thread::Current(),
-                                                       kStunAddr1)),
-        stun_server_2_(cricket::TestStunServer::Create(rtc::Thread::Current(),
-                                                       kStunAddr2)),
+        socket_factory_(ss_.get()),
+        stun_server_1_(cricket::TestStunServer::Create(ss_.get(), kStunAddr1)),
+        stun_server_2_(cricket::TestStunServer::Create(ss_.get(), kStunAddr2)),
         done_(false),
         error_(false),
         stun_keepalive_delay_(1),
@@ -79,9 +78,9 @@ class StunPortTestBase : public ::testing::Test, public sigslot::has_slots<> {
     stun_port_ = cricket::StunPort::Create(
         rtc::Thread::Current(), &socket_factory_, &network_, 0, 0,
         rtc::CreateRandomString(16), rtc::CreateRandomString(22), stun_servers,
-        std::string(), absl::nullopt);
+        absl::nullopt, &field_trials_);
     stun_port_->set_stun_keepalive_delay(stun_keepalive_delay_);
-    // If |stun_keepalive_lifetime_| is negative, let the stun port
+    // If `stun_keepalive_lifetime_` is negative, let the stun port
     // choose its lifetime from the network type.
     if (stun_keepalive_lifetime_ >= 0) {
       stun_port_->set_stun_keepalive_lifetime(stun_keepalive_lifetime_);
@@ -105,8 +104,8 @@ class StunPortTestBase : public ::testing::Test, public sigslot::has_slots<> {
     socket_->SignalReadPacket.connect(this, &StunPortTestBase::OnReadPacket);
     stun_port_ = cricket::UDPPort::Create(
         rtc::Thread::Current(), &socket_factory_, &network_, socket_.get(),
-        rtc::CreateRandomString(16), rtc::CreateRandomString(22), std::string(),
-        false, absl::nullopt);
+        rtc::CreateRandomString(16), rtc::CreateRandomString(22), false,
+        absl::nullopt, &field_trials_);
     ASSERT_TRUE(stun_port_ != NULL);
     ServerAddresses stun_servers;
     stun_servers.insert(server_addr);
@@ -177,6 +176,7 @@ class StunPortTestBase : public ::testing::Test, public sigslot::has_slots<> {
 
  protected:
   cricket::IceCandidateErrorEvent error_event_;
+  webrtc::test::ScopedKeyValueConfig field_trials_;
 };
 
 class StunPortTestWithRealClock : public StunPortTestBase {};
@@ -225,7 +225,7 @@ TEST_F(StunPortTest, TestPrepareAddressFail) {
   EXPECT_EQ_SIMULATED_WAIT(error_event_.error_code,
                            cricket::SERVER_NOT_REACHABLE_ERROR, kTimeoutMs,
                            fake_clock);
-  ASSERT_NE(error_event_.error_text.find("."), std::string::npos);
+  ASSERT_NE(error_event_.error_text.find('.'), std::string::npos);
   ASSERT_NE(error_event_.address.find(kLocalAddr.HostAsSensitiveURIString()),
             std::string::npos);
   std::string server_url = "stun:" + kBadAddr.ToString();
@@ -352,15 +352,15 @@ TEST_F(StunPortTest, TestTwoCandidatesWithTwoStunServersAcrossNat) {
 // type on a STUN port. Also test that it will be updated if the network type
 // changes.
 TEST_F(StunPortTest, TestStunPortGetStunKeepaliveLifetime) {
-  // Lifetime for the default (unknown) network type is |kInfiniteLifetime|.
+  // Lifetime for the default (unknown) network type is `kInfiniteLifetime`.
   CreateStunPort(kStunAddr1);
   EXPECT_EQ(kInfiniteLifetime, port()->stun_keepalive_lifetime());
-  // Lifetime for the cellular network is |kHighCostPortKeepaliveLifetimeMs|
+  // Lifetime for the cellular network is `kHighCostPortKeepaliveLifetimeMs`
   SetNetworkType(rtc::ADAPTER_TYPE_CELLULAR);
   EXPECT_EQ(kHighCostPortKeepaliveLifetimeMs,
             port()->stun_keepalive_lifetime());
 
-  // Lifetime for the wifi network is |kInfiniteLifetime|.
+  // Lifetime for the wifi network is `kInfiniteLifetime`.
   SetNetworkType(rtc::ADAPTER_TYPE_WIFI);
   CreateStunPort(kStunAddr2);
   EXPECT_EQ(kInfiniteLifetime, port()->stun_keepalive_lifetime());
@@ -370,15 +370,15 @@ TEST_F(StunPortTest, TestStunPortGetStunKeepaliveLifetime) {
 // type on a shared STUN port (UDPPort). Also test that it will be updated
 // if the network type changes.
 TEST_F(StunPortTest, TestUdpPortGetStunKeepaliveLifetime) {
-  // Lifetime for the default (unknown) network type is |kInfiniteLifetime|.
+  // Lifetime for the default (unknown) network type is `kInfiniteLifetime`.
   CreateSharedUdpPort(kStunAddr1, nullptr);
   EXPECT_EQ(kInfiniteLifetime, port()->stun_keepalive_lifetime());
-  // Lifetime for the cellular network is |kHighCostPortKeepaliveLifetimeMs|.
+  // Lifetime for the cellular network is `kHighCostPortKeepaliveLifetimeMs`.
   SetNetworkType(rtc::ADAPTER_TYPE_CELLULAR);
   EXPECT_EQ(kHighCostPortKeepaliveLifetimeMs,
             port()->stun_keepalive_lifetime());
 
-  // Lifetime for the wifi network type is |kInfiniteLifetime|.
+  // Lifetime for the wifi network type is `kInfiniteLifetime`.
   SetNetworkType(rtc::ADAPTER_TYPE_WIFI);
   CreateSharedUdpPort(kStunAddr2, nullptr);
   EXPECT_EQ(kInfiniteLifetime, port()->stun_keepalive_lifetime());
@@ -393,7 +393,7 @@ TEST_F(StunPortTest, TestStunBindingRequestShortLifetime) {
   PrepareAddress();
   EXPECT_TRUE_SIMULATED_WAIT(done(), kTimeoutMs, fake_clock);
   EXPECT_TRUE_SIMULATED_WAIT(
-      !port()->HasPendingRequest(cricket::STUN_BINDING_REQUEST), 2000,
+      !port()->HasPendingRequestForTest(cricket::STUN_BINDING_REQUEST), 2000,
       fake_clock);
 }
 
@@ -404,7 +404,7 @@ TEST_F(StunPortTest, TestStunBindingRequestLongLifetime) {
   PrepareAddress();
   EXPECT_TRUE_SIMULATED_WAIT(done(), kTimeoutMs, fake_clock);
   EXPECT_TRUE_SIMULATED_WAIT(
-      port()->HasPendingRequest(cricket::STUN_BINDING_REQUEST), 1000,
+      port()->HasPendingRequestForTest(cricket::STUN_BINDING_REQUEST), 1000,
       fake_clock);
 }
 
@@ -412,24 +412,29 @@ class MockAsyncPacketSocket : public rtc::AsyncPacketSocket {
  public:
   ~MockAsyncPacketSocket() = default;
 
-  MOCK_CONST_METHOD0(GetLocalAddress, SocketAddress());
-  MOCK_CONST_METHOD0(GetRemoteAddress, SocketAddress());
-  MOCK_METHOD3(Send,
-               int(const void* pv,
-                   size_t cb,
-                   const rtc::PacketOptions& options));
+  MOCK_METHOD(SocketAddress, GetLocalAddress, (), (const, override));
+  MOCK_METHOD(SocketAddress, GetRemoteAddress, (), (const, override));
+  MOCK_METHOD(int,
+              Send,
+              (const void* pv, size_t cb, const rtc::PacketOptions& options),
+              (override));
 
-  MOCK_METHOD4(SendTo,
-               int(const void* pv,
-                   size_t cb,
-                   const SocketAddress& addr,
-                   const rtc::PacketOptions& options));
-  MOCK_METHOD0(Close, int());
-  MOCK_CONST_METHOD0(GetState, State());
-  MOCK_METHOD2(GetOption, int(rtc::Socket::Option opt, int* value));
-  MOCK_METHOD2(SetOption, int(rtc::Socket::Option opt, int value));
-  MOCK_CONST_METHOD0(GetError, int());
-  MOCK_METHOD1(SetError, void(int error));
+  MOCK_METHOD(int,
+              SendTo,
+              (const void* pv,
+               size_t cb,
+               const SocketAddress& addr,
+               const rtc::PacketOptions& options),
+              (override));
+  MOCK_METHOD(int, Close, (), (override));
+  MOCK_METHOD(State, GetState, (), (const, override));
+  MOCK_METHOD(int,
+              GetOption,
+              (rtc::Socket::Option opt, int* value),
+              (override));
+  MOCK_METHOD(int, SetOption, (rtc::Socket::Option opt, int value), (override));
+  MOCK_METHOD(int, GetError, (), (const, override));
+  MOCK_METHOD(void, SetError, (int error), (override));
 };
 
 // Test that outbound packets inherit the dscp value assigned to the socket.

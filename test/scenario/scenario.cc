@@ -198,7 +198,7 @@ SimulationNode* Scenario::CreateMutableSimulationNode(
 void Scenario::TriggerPacketBurst(std::vector<EmulatedNetworkNode*> over_nodes,
                                   size_t num_packets,
                                   size_t packet_size) {
-  network_manager_.CreateTrafficRoute(over_nodes)
+  network_manager_.CreateCrossTrafficRoute(over_nodes)
       ->TriggerPacketBurst(num_packets, packet_size);
 }
 
@@ -206,7 +206,7 @@ void Scenario::NetworkDelayedAction(
     std::vector<EmulatedNetworkNode*> over_nodes,
     size_t packet_size,
     std::function<void()> action) {
-  network_manager_.CreateTrafficRoute(over_nodes)
+  network_manager_.CreateCrossTrafficRoute(over_nodes)
       ->NetworkDelayedAction(packet_size, action);
 }
 
@@ -266,7 +266,8 @@ void Scenario::Post(std::function<void()> function) {
 
 void Scenario::At(TimeDelta offset, std::function<void()> function) {
   RTC_DCHECK_GT(offset, TimeSinceStart());
-  task_queue_.PostDelayedTask(function, TimeUntilTarget(offset).ms());
+  task_queue_.PostDelayedTask(ToQueuedTask(std::move(function)),
+                              TimeUntilTarget(offset).ms());
 }
 
 void Scenario::RunFor(TimeDelta duration) {

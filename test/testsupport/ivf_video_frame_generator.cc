@@ -38,31 +38,29 @@ IvfVideoFrameGenerator::IvfVideoFrameGenerator(const std::string& file_name)
       width_(file_reader_->GetFrameWidth()),
       height_(file_reader_->GetFrameHeight()) {
   RTC_CHECK(video_decoder_) << "No decoder found for file's video codec type";
-  VideoCodec codec_settings;
-  codec_settings.codecType = file_reader_->GetVideoCodecType();
-  codec_settings.width = file_reader_->GetFrameWidth();
-  codec_settings.height = file_reader_->GetFrameHeight();
+  VideoDecoder::Settings decoder_settings;
+  decoder_settings.set_codec_type(file_reader_->GetVideoCodecType());
+  decoder_settings.set_max_render_resolution(
+      {file_reader_->GetFrameWidth(), file_reader_->GetFrameHeight()});
   // Set buffer pool size to max value to ensure that if users of generator,
   // ex. test frameworks, will retain frames for quite a long time, decoder
   // won't crash with buffers pool overflow error.
-  codec_settings.buffer_pool_size = std::numeric_limits<int>::max();
+  decoder_settings.set_buffer_pool_size(std::numeric_limits<int>::max());
   RTC_CHECK_EQ(video_decoder_->RegisterDecodeCompleteCallback(&callback_),
                WEBRTC_VIDEO_CODEC_OK);
-  RTC_CHECK_EQ(
-      video_decoder_->InitDecode(&codec_settings, /*number_of_cores=*/1),
-      WEBRTC_VIDEO_CODEC_OK);
+  RTC_CHECK(video_decoder_->Configure(decoder_settings));
 }
 IvfVideoFrameGenerator::~IvfVideoFrameGenerator() {
-  rtc::CritScope crit(&lock_);
+  MutexLock lock(&lock_);
   if (!file_reader_) {
     return;
   }
   file_reader_->Close();
   file_reader_.reset();
-  // Reset decoder to prevent it from async access to |this|.
+  // Reset decoder to prevent it from async access to `this`.
   video_decoder_.reset();
   {
-    rtc::CritScope frame_crit(&frame_decode_lock_);
+    MutexLock frame_lock(&frame_decode_lock_);
     next_frame_ = absl::nullopt;
     // Set event in case another thread is waiting on it.
     next_frame_decoded_.Set();
@@ -70,7 +68,7 @@ IvfVideoFrameGenerator::~IvfVideoFrameGenerator() {
 }
 
 FrameGeneratorInterface::VideoFrameData IvfVideoFrameGenerator::NextFrame() {
-  rtc::CritScope crit(&lock_);
+  MutexLock lock(&lock_);
   next_frame_decoded_.Reset();
   RTC_CHECK(file_reader_);
   if (!file_reader_->HasMoreFrames()) {
@@ -86,7 +84,7 @@ FrameGeneratorInterface::VideoFrameData IvfVideoFrameGenerator::NextFrame() {
   RTC_CHECK(decoded) << "Failed to decode next frame in "
                      << kMaxNextFrameWaitTemeoutMs << "ms. Can't continue";
 
-  rtc::CritScope frame_crit(&frame_decode_lock_);
+  MutexLock frame_lock(&frame_decode_lock_);
   rtc::scoped_refptr<VideoFrameBuffer> buffer =
       next_frame_->video_frame_buffer();
   if (width_ != static_cast<size_t>(buffer->width()) ||
@@ -102,7 +100,7 @@ FrameGeneratorInterface::VideoFrameData IvfVideoFrameGenerator::NextFrame() {
 }
 
 void IvfVideoFrameGenerator::ChangeResolution(size_t width, size_t height) {
-  rtc::CritScope crit(&lock_);
+  MutexLock lock(&lock_);
   width_ = width;
   height_ = height;
 }
@@ -126,7 +124,7 @@ void IvfVideoFrameGenerator::DecodedCallback::Decoded(
 }
 
 void IvfVideoFrameGenerator::OnFrameDecoded(const VideoFrame& decoded_frame) {
-  rtc::CritScope crit(&frame_decode_lock_);
+  MutexLock lock(&frame_decode_lock_);
   next_frame_ = decoded_frame;
   next_frame_decoded_.Set();
 }

@@ -14,7 +14,9 @@
 #include <memory>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "api/units/time_delta.h"
+#include "api/units/timestamp.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/rtpfb.h"
 
 namespace webrtc {
@@ -36,8 +38,7 @@ class TransportFeedback : public Rtpfb {
 
     uint16_t sequence_number() const { return sequence_number_; }
     int16_t delta_ticks() const { return delta_ticks_; }
-    int32_t delta_us() const { return delta_ticks_ * kDeltaScaleFactor; }
-    TimeDelta delta() const { return TimeDelta::Micros(delta_us()); }
+    TimeDelta delta() const { return delta_ticks_ * kDeltaTick; }
     bool received() const { return received_; }
 
    private:
@@ -48,13 +49,13 @@ class TransportFeedback : public Rtpfb {
   // TODO(sprang): IANA reg?
   static constexpr uint8_t kFeedbackMessageType = 15;
   // Convert to multiples of 0.25ms.
-  static constexpr int kDeltaScaleFactor = 250;
+  static constexpr TimeDelta kDeltaTick = TimeDelta::Micros(250);
   // Maximum number of packets (including missing) TransportFeedback can report.
   static constexpr size_t kMaxReportedPackets = 0xffff;
 
   TransportFeedback();
 
-  // If |include_timestamps| is set to false, the created packet will not
+  // If `include_timestamps` is set to false, the created packet will not
   // contain the receive delta block.
   explicit TransportFeedback(bool include_timestamps,
                              bool include_lost = false);
@@ -63,11 +64,12 @@ class TransportFeedback : public Rtpfb {
 
   ~TransportFeedback() override;
 
-  void SetBase(uint16_t base_sequence,     // Seq# of first packet in this msg.
-               int64_t ref_timestamp_us);  // Reference timestamp for this msg.
+  void SetBase(uint16_t base_sequence,    // Seq# of first packet in this msg.
+               Timestamp ref_timestamp);  // Reference timestamp for this msg.
+
   void SetFeedbackSequenceNumber(uint8_t feedback_sequence);
   // NOTE: This method requires increasing sequence numbers (excepting wraps).
-  bool AddReceivedPacket(uint16_t sequence_number, int64_t timestamp_us);
+  bool AddReceivedPacket(uint16_t sequence_number, Timestamp timestamp);
   const std::vector<ReceivedPacket>& GetReceivedPackets() const;
   const std::vector<ReceivedPacket>& GetAllPackets() const;
 
@@ -76,13 +78,11 @@ class TransportFeedback : public Rtpfb {
   // Returns number of packets (including missing) this feedback describes.
   size_t GetPacketStatusCount() const { return num_seq_no_; }
 
-  // Get the reference time in microseconds, including any precision loss.
-  int64_t GetBaseTimeUs() const;
-  TimeDelta GetBaseTime() const;
+  // Get the reference time including any precision loss.
+  Timestamp BaseTime() const;
 
-  // Get the unwrapped delta between current base time and |prev_timestamp_us|.
-  int64_t GetBaseDeltaUs(int64_t prev_timestamp_us) const;
-  TimeDelta GetBaseDelta(TimeDelta prev_timestamp) const;
+  // Get the unwrapped delta between current base time and `prev_timestamp`.
+  TimeDelta GetBaseDelta(Timestamp prev_timestamp) const;
 
   // Does the feedback packet contain timestamp information?
   bool IncludeTimestamps() const { return include_timestamps_; }
@@ -116,9 +116,9 @@ class TransportFeedback : public Rtpfb {
     bool Empty() const;
     void Clear();
     // Return if delta sizes still can be encoded into single chunk with added
-    // |delta_size|.
+    // `delta_size`.
     bool CanAdd(DeltaSize delta_size) const;
-    // Add |delta_size|, assumes |CanAdd(delta_size)|,
+    // Add `delta_size`, assumes `CanAdd(delta_size)`,
     void Add(DeltaSize delta_size);
 
     // Encode chunk as large as possible removing encoded delta sizes.
@@ -127,9 +127,9 @@ class TransportFeedback : public Rtpfb {
     // Encode all stored delta_sizes into single chunk, pad with 0s if needed.
     uint16_t EncodeLast() const;
 
-    // Decode up to |max_size| delta sizes from |chunk|.
+    // Decode up to `max_size` delta sizes from `chunk`.
     void Decode(uint16_t chunk, size_t max_size);
-    // Appends content of the Lastchunk to |deltas|.
+    // Appends content of the Lastchunk to `deltas`.
     void AppendTo(std::vector<DeltaSize>* deltas) const;
 
    private:
@@ -162,11 +162,11 @@ class TransportFeedback : public Rtpfb {
   const bool include_lost_;
   uint16_t base_seq_no_;
   uint16_t num_seq_no_;
-  int32_t base_time_ticks_;
+  uint32_t base_time_ticks_;
   uint8_t feedback_seq_;
   bool include_timestamps_;
 
-  int64_t last_timestamp_us_;
+  Timestamp last_timestamp_;
   std::vector<ReceivedPacket> received_packets_;
   std::vector<ReceivedPacket> all_packets_;
   // All but last encoded packet chunks.

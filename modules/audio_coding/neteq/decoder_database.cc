@@ -113,12 +113,6 @@ int DecoderDatabase::Size() const {
   return static_cast<int>(decoders_.size());
 }
 
-void DecoderDatabase::Reset() {
-  decoders_.clear();
-  active_decoder_type_ = -1;
-  active_cng_decoder_type_ = -1;
-}
-
 std::vector<int> DecoderDatabase::SetCodecs(
     const std::map<int, SdpAudioFormat>& codecs) {
   // First collect all payload types that we'll remove or reassign, then remove
@@ -161,7 +155,7 @@ int DecoderDatabase::RegisterPayload(int rtp_payload_type,
       rtp_payload_type,
       DecoderInfo(audio_format, codec_pair_id_, decoder_factory_.get())));
   if (ret.second == false) {
-    // Database already contains a decoder with type |rtp_payload_type|.
+    // Database already contains a decoder with type `rtp_payload_type`.
     return kDecoderExists;
   }
   return kOK;
@@ -169,7 +163,7 @@ int DecoderDatabase::RegisterPayload(int rtp_payload_type,
 
 int DecoderDatabase::Remove(uint8_t rtp_payload_type) {
   if (decoders_.erase(rtp_payload_type) == 0) {
-    // No decoder with that |rtp_payload_type|.
+    // No decoder with that `rtp_payload_type`.
     return kDecoderNotFound;
   }
   if (active_decoder_type_ == rtp_payload_type) {
@@ -199,7 +193,7 @@ const DecoderDatabase::DecoderInfo* DecoderDatabase::GetDecoderInfo(
 
 int DecoderDatabase::SetActiveDecoder(uint8_t rtp_payload_type,
                                       bool* new_decoder) {
-  // Check that |rtp_payload_type| exists in the database.
+  // Check that `rtp_payload_type` exists in the database.
   const DecoderInfo* info = GetDecoderInfo(rtp_payload_type);
   if (!info) {
     // Decoder not found.
@@ -231,7 +225,7 @@ AudioDecoder* DecoderDatabase::GetActiveDecoder() const {
 }
 
 int DecoderDatabase::SetActiveCngDecoder(uint8_t rtp_payload_type) {
-  // Check that |rtp_payload_type| exists in the database.
+  // Check that `rtp_payload_type` exists in the database.
   const DecoderInfo* info = GetDecoderInfo(rtp_payload_type);
   if (!info) {
     // Decoder not found.
@@ -261,16 +255,6 @@ ComfortNoiseDecoder* DecoderDatabase::GetActiveCngDecoder() const {
 AudioDecoder* DecoderDatabase::GetDecoder(uint8_t rtp_payload_type) const {
   const DecoderInfo* info = GetDecoderInfo(rtp_payload_type);
   return info ? info->GetDecoder() : nullptr;
-}
-
-bool DecoderDatabase::IsType(uint8_t rtp_payload_type, const char* name) const {
-  const DecoderInfo* info = GetDecoderInfo(rtp_payload_type);
-  return info && info->IsType(name);
-}
-
-bool DecoderDatabase::IsType(uint8_t rtp_payload_type,
-                             const std::string& name) const {
-  return IsType(rtp_payload_type, name.c_str());
 }
 
 bool DecoderDatabase::IsComfortNoise(uint8_t rtp_payload_type) const {

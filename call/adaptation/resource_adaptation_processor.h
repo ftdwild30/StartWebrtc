@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019 The WebRTC Project Authors. All rights reserved.
+ *  Copyright 2020 The WebRTC Project Authors. All rights reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -11,106 +11,155 @@
 #ifndef CALL_ADAPTATION_RESOURCE_ADAPTATION_PROCESSOR_H_
 #define CALL_ADAPTATION_RESOURCE_ADAPTATION_PROCESSOR_H_
 
+#include <map>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
-#include "call/adaptation/resource.h"
-#include "call/adaptation/resource_consumer.h"
-#include "call/adaptation/resource_consumer_configuration.h"
+#include "api/adaptation/resource.h"
+#include "api/rtp_parameters.h"
+#include "api/scoped_refptr.h"
+#include "api/task_queue/task_queue_base.h"
+#include "api/video/video_adaptation_counters.h"
+#include "api/video/video_frame.h"
+#include "api/video/video_stream_encoder_observer.h"
+#include "call/adaptation/resource_adaptation_processor_interface.h"
+#include "call/adaptation/video_source_restrictions.h"
+#include "call/adaptation/video_stream_adapter.h"
+#include "call/adaptation/video_stream_input_state.h"
+#include "call/adaptation/video_stream_input_state_provider.h"
 
 namespace webrtc {
 
-struct ConsumerConfigurationPair {
-  ConsumerConfigurationPair(ResourceConsumer* consumer,
-                            ResourceConsumerConfiguration* configuration);
-
-  ResourceConsumer* consumer;
-  ResourceConsumerConfiguration* configuration;
-};
-
-// Given a set of Resources, ResourceConsumers and
-// ResourceConsumerConfigurations, the processor calculates which consumer, if
-// any, should be reconfigured and how, in order to adapt to resource
-// constraints.
-//   Example: "CPU" is a resource, a video stream being encoded is a consumer
-// and the encoder setting (e.g. VP8/720p/30fps) is a configuration.
+// The Resource Adaptation Processor is responsible for reacting to resource
+// usage measurements (e.g. overusing or underusing CPU). When a resource is
+// overused the Processor is responsible for performing mitigations in order to
+// consume less resources.
 //
-// A resource can be "overused", "stable" or "underused". The processor
-// maximises quality without overusing any resource as follows:
-// 1. If we are "overusing" on any resource, find the most expensive consumer
-//    and adapt it one step "down".
-// 2. If we are "underusing" on all resources, find the least expensive consumer
-//    and adapt it one step "up".
+// Today we have one Processor per VideoStreamEncoder and the Processor is only
+// capable of restricting resolution or frame rate of the encoded stream. In the
+// future we should have a single Processor responsible for all encoded streams,
+// and it should be capable of reconfiguring other things than just
+// VideoSourceRestrictions (e.g. reduce render frame rate).
+// See Resource-Adaptation hotlist:
+// https://bugs.chromium.org/u/590058293/hotlists/Resource-Adaptation
 //
-// The expensiveness of a consumer is the expensiveness of its current
-// configuration and the cost of a configuration is estimated based on pixels
-// per second. How a consumer can be reconfigured in terms of one step "up" or
-// "down" is expressed as a graph: each configuration has a set of "upper"
-// neighbors and "lower" neighbors. When there are multiple options, neighbors
-// are chosen based on configuration preferences.
-//
-// See FindNextConfiguration().
-//
-// This class owns all resources, consumers and configurations. As long as it is
-// alive, raw pointers to these are safe to use.
-class ResourceAdaptationProcessor {
+// The ResourceAdaptationProcessor is single-threaded. It may be constructed on
+// any thread but MUST subsequently be used and destroyed on a single sequence,
+// i.e. the "resource adaptation task queue". Resources can be added and removed
+// from any thread.
+class ResourceAdaptationProcessor : public ResourceAdaptationProcessorInterface,
+                                    public VideoSourceRestrictionsListener,
+                                    public ResourceListener {
  public:
-  const std::vector<std::unique_ptr<Resource>>& resources() const {
-    return resources_;
-  }
-  const std::vector<std::unique_ptr<ResourceConsumerConfiguration>>&
-  configurations() const {
-    return configurations_;
-  }
-  const std::vector<std::unique_ptr<ResourceConsumer>>& consumers() const {
-    return consumers_;
-  }
+  explicit ResourceAdaptationProcessor(
+      VideoStreamAdapter* video_stream_adapter);
+  ~ResourceAdaptationProcessor() override;
 
-  // Takes on ownership of the argument. A raw pointer is returned to the object
-  // for convenience; it is valid for the lifetime of the
-  // ResourceAdaptationProcessor.
-  // T = any subclass of Resource
-  template <typename T>
-  T* AddResource(std::unique_ptr<T> resource) {
-    T* resource_ptr = resource.get();
-    resources_.push_back(std::move(resource));
-    return resource_ptr;
-  }
-  // T = any subclass of ResourceConsumerConfiguration
-  template <typename T>
-  T* AddConfiguration(std::unique_ptr<T> configuration) {
-    T* configuration_ptr = configuration.get();
-    configurations_.push_back(std::move(configuration));
-    return configuration_ptr;
-  }
-  // T = any subclass of ResourceConsumer
-  template <typename T>
-  T* AddConsumer(std::unique_ptr<T> consumer) {
-    T* consumer_ptr = consumer.get();
-    consumers_.push_back(std::move(consumer));
-    return consumer_ptr;
-  }
+  // ResourceAdaptationProcessorInterface implementation.
+  void AddResourceLimitationsListener(
+      ResourceLimitationsListener* limitations_listener) override;
+  void RemoveResourceLimitationsListener(
+      ResourceLimitationsListener* limitations_listener) override;
+  void AddResource(rtc::scoped_refptr<Resource> resource) override;
+  std::vector<rtc::scoped_refptr<Resource>> GetResources() const override;
+  void RemoveResource(rtc::scoped_refptr<Resource> resource) override;
 
-  // Based on the current state of the resources and consumers, finds the
-  // consumer that should be reconfigured up or down in order to maximies
-  // quality without overusing any resources, as described in
-  // ResourceAdaptationProcessor's class description.
-  //
-  // When this is used in a real system, care needs to be taken for how often
-  // FindNextConfiguration() is called. There may be a delay between
-  // reconfiguring a consumer and the desired effects being observed on resource
-  // usage.
-  absl::optional<ConsumerConfigurationPair> FindNextConfiguration();
+  // ResourceListener implementation.
+  // Triggers OnResourceUnderuse() or OnResourceOveruse().
+  void OnResourceUsageStateMeasured(rtc::scoped_refptr<Resource> resource,
+                                    ResourceUsageState usage_state) override;
+
+  // VideoSourceRestrictionsListener implementation.
+  void OnVideoSourceRestrictionsUpdated(
+      VideoSourceRestrictions restrictions,
+      const VideoAdaptationCounters& adaptation_counters,
+      rtc::scoped_refptr<Resource> reason,
+      const VideoSourceRestrictions& unfiltered_restrictions) override;
 
  private:
-  ResourceConsumer* FindMostExpensiveConsumerThatCanBeAdaptedDown();
-  ResourceConsumer* FindLeastExpensiveConsumerThatCanBeAdaptedUp();
+  // If resource usage measurements happens off the adaptation task queue, this
+  // class takes care of posting the measurement for the processor to handle it
+  // on the adaptation task queue.
+  class ResourceListenerDelegate : public rtc::RefCountInterface,
+                                   public ResourceListener {
+   public:
+    explicit ResourceListenerDelegate(ResourceAdaptationProcessor* processor);
 
-  std::vector<std::unique_ptr<Resource>> resources_;
-  std::vector<std::unique_ptr<ResourceConsumerConfiguration>> configurations_;
-  std::vector<std::unique_ptr<ResourceConsumer>> consumers_;
+    void OnProcessorDestroyed();
+
+    // ResourceListener implementation.
+    void OnResourceUsageStateMeasured(rtc::scoped_refptr<Resource> resource,
+                                      ResourceUsageState usage_state) override;
+
+   private:
+    TaskQueueBase* task_queue_;
+    ResourceAdaptationProcessor* processor_ RTC_GUARDED_BY(task_queue_);
+  };
+
+  enum class MitigationResult {
+    kNotMostLimitedResource,
+    kSharedMostLimitedResource,
+    kRejectedByAdapter,
+    kAdaptationApplied,
+  };
+
+  struct MitigationResultAndLogMessage {
+    MitigationResultAndLogMessage();
+    MitigationResultAndLogMessage(MitigationResult result,
+                                  absl::string_view message);
+    MitigationResult result;
+    std::string message;
+  };
+
+  // Performs the adaptation by getting the next target, applying it and
+  // informing listeners of the new VideoSourceRestriction and adaptation
+  // counters.
+  MitigationResultAndLogMessage OnResourceUnderuse(
+      rtc::scoped_refptr<Resource> reason_resource);
+  MitigationResultAndLogMessage OnResourceOveruse(
+      rtc::scoped_refptr<Resource> reason_resource);
+
+  void UpdateResourceLimitations(rtc::scoped_refptr<Resource> reason_resource,
+                                 const VideoSourceRestrictions& restrictions,
+                                 const VideoAdaptationCounters& counters)
+      RTC_RUN_ON(task_queue_);
+
+  // Searches `adaptation_limits_by_resources_` for each resource with the
+  // highest total adaptation counts. Adaptation up may only occur if the
+  // resource performing the adaptation is the only most limited resource. This
+  // function returns the list of all most limited resources as well as the
+  // corresponding adaptation of that resource.
+  std::pair<std::vector<rtc::scoped_refptr<Resource>>,
+            VideoStreamAdapter::RestrictionsWithCounters>
+  FindMostLimitedResources() const RTC_RUN_ON(task_queue_);
+
+  void RemoveLimitationsImposedByResource(
+      rtc::scoped_refptr<Resource> resource);
+
+  TaskQueueBase* task_queue_;
+  rtc::scoped_refptr<ResourceListenerDelegate> resource_listener_delegate_;
+  // Input and output.
+  mutable Mutex resources_lock_;
+  std::vector<rtc::scoped_refptr<Resource>> resources_
+      RTC_GUARDED_BY(resources_lock_);
+  std::vector<ResourceLimitationsListener*> resource_limitations_listeners_
+      RTC_GUARDED_BY(task_queue_);
+  // Purely used for statistics, does not ensure mapped resources stay alive.
+  std::map<rtc::scoped_refptr<Resource>,
+           VideoStreamAdapter::RestrictionsWithCounters>
+      adaptation_limits_by_resources_ RTC_GUARDED_BY(task_queue_);
+  // Responsible for generating and applying possible adaptations.
+  VideoStreamAdapter* const stream_adapter_ RTC_GUARDED_BY(task_queue_);
+  VideoSourceRestrictions last_reported_source_restrictions_
+      RTC_GUARDED_BY(task_queue_);
+  // Keeps track of previous mitigation results per resource since the last
+  // successful adaptation. Used to avoid RTC_LOG spam.
+  std::map<Resource*, MitigationResult> previous_mitigation_results_
+      RTC_GUARDED_BY(task_queue_);
 };
 
 }  // namespace webrtc

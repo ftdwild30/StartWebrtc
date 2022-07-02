@@ -14,39 +14,40 @@
 #include <functional>
 #include <string>
 #include "absl/strings/match.h"
+#include "api/function_view.h"
 #include "modules/desktop_capture/mac/window_list_utils.h"
 
 namespace webrtc {
 namespace {
 
 static constexpr const char* kPowerPointSlideShowTitles[] = {
-    u8"PowerPoint-Bildschirmpräsentation",
-    u8"Προβολή παρουσίασης PowerPoint",
-    u8"PowerPoint スライド ショー",
-    u8"PowerPoint Slide Show",
-    u8"PowerPoint 幻灯片放映",
-    u8"Presentación de PowerPoint",
-    u8"PowerPoint-slideshow",
-    u8"Presentazione di PowerPoint",
-    u8"Prezentácia programu PowerPoint",
-    u8"Apresentação do PowerPoint",
-    u8"PowerPoint-bildspel",
-    u8"Prezentace v aplikaci PowerPoint",
-    u8"PowerPoint 슬라이드 쇼",
-    u8"PowerPoint-lysbildefremvisning",
-    u8"PowerPoint-vetítés",
-    u8"PowerPoint Slayt Gösterisi",
-    u8"Pokaz slajdów programu PowerPoint",
-    u8"PowerPoint 投影片放映",
-    u8"Демонстрация PowerPoint",
-    u8"Diaporama PowerPoint",
-    u8"PowerPoint-diaesitys",
-    u8"Peragaan Slide PowerPoint",
-    u8"PowerPoint-diavoorstelling",
-    u8"การนำเสนอสไลด์ PowerPoint",
-    u8"Apresentação de slides do PowerPoint",
-    u8"הצגת שקופיות של PowerPoint",
-    u8"عرض شرائح في PowerPoint"};
+    "PowerPoint-Bildschirmpräsentation",
+    "Προβολή παρουσίασης PowerPoint",
+    "PowerPoint スライド ショー",
+    "PowerPoint Slide Show",
+    "PowerPoint 幻灯片放映",
+    "Presentación de PowerPoint",
+    "PowerPoint-slideshow",
+    "Presentazione di PowerPoint",
+    "Prezentácia programu PowerPoint",
+    "Apresentação do PowerPoint",
+    "PowerPoint-bildspel",
+    "Prezentace v aplikaci PowerPoint",
+    "PowerPoint 슬라이드 쇼",
+    "PowerPoint-lysbildefremvisning",
+    "PowerPoint-vetítés",
+    "PowerPoint Slayt Gösterisi",
+    "Pokaz slajdów programu PowerPoint",
+    "PowerPoint 投影片放映",
+    "Демонстрация PowerPoint",
+    "Diaporama PowerPoint",
+    "PowerPoint-diaesitys",
+    "Peragaan Slide PowerPoint",
+    "PowerPoint-diavoorstelling",
+    "การนำเสนอสไลด์ PowerPoint",
+    "Apresentação de slides do PowerPoint",
+    "הצגת שקופיות של PowerPoint",
+    "عرض شرائح في PowerPoint"};
 
 class FullScreenMacApplicationHandler : public FullScreenApplicationHandler {
  public:
@@ -59,17 +60,17 @@ class FullScreenMacApplicationHandler : public FullScreenApplicationHandler {
         title_predicate_(title_predicate),
         owner_pid_(GetWindowOwnerPid(sourceId)) {}
 
+ protected:
+  using CachePredicate =
+      rtc::FunctionView<bool(const DesktopCapturer::Source&)>;
+
   void InvalidateCacheIfNeeded(const DesktopCapturer::SourceList& source_list,
-                               int64_t timestamp) const {
-    // Copy only sources with the same pid
+                               int64_t timestamp,
+                               CachePredicate predicate) const {
     if (timestamp != cache_timestamp_) {
       cache_sources_.clear();
       std::copy_if(source_list.begin(), source_list.end(),
-                   std::back_inserter(cache_sources_),
-                   [&](const DesktopCapturer::Source& src) {
-                     return src.id != GetSourceId() &&
-                            GetWindowOwnerPid(src.id) == owner_pid_;
-                   });
+                   std::back_inserter(cache_sources_), predicate);
       cache_timestamp_ = timestamp;
     }
   }
@@ -77,7 +78,11 @@ class FullScreenMacApplicationHandler : public FullScreenApplicationHandler {
   WindowId FindFullScreenWindowWithSamePid(
       const DesktopCapturer::SourceList& source_list,
       int64_t timestamp) const {
-    InvalidateCacheIfNeeded(source_list, timestamp);
+    InvalidateCacheIfNeeded(source_list, timestamp,
+                            [&](const DesktopCapturer::Source& src) {
+                              return src.id != GetSourceId() &&
+                                     GetWindowOwnerPid(src.id) == owner_pid_;
+                            });
     if (cache_sources_.empty())
       return kCGNullWindowID;
 
@@ -119,7 +124,7 @@ class FullScreenMacApplicationHandler : public FullScreenApplicationHandler {
                : FindFullScreenWindowWithSamePid(source_list, timestamp);
   }
 
- private:
+ protected:
   const TitlePredicate title_predicate_;
   const int owner_pid_;
   mutable int64_t cache_timestamp_ = 0;
@@ -143,6 +148,52 @@ bool slide_show_title_predicate(const std::string& original_title,
   return false;
 }
 
+class OpenOfficeApplicationHandler : public FullScreenMacApplicationHandler {
+ public:
+  OpenOfficeApplicationHandler(DesktopCapturer::SourceId sourceId)
+      : FullScreenMacApplicationHandler(sourceId, nullptr) {}
+
+  DesktopCapturer::SourceId FindFullScreenWindow(
+      const DesktopCapturer::SourceList& source_list,
+      int64_t timestamp) const override {
+    InvalidateCacheIfNeeded(source_list, timestamp,
+                            [&](const DesktopCapturer::Source& src) {
+                              return GetWindowOwnerPid(src.id) == owner_pid_;
+                            });
+
+    const auto original_window = GetSourceId();
+    const std::string original_title = GetWindowTitle(original_window);
+
+    // Check if we have only one document window, otherwise it's not possible
+    // to securely match a document window and a slide show window which has
+    // empty title.
+    if (std::any_of(cache_sources_.begin(), cache_sources_.end(),
+                    [&original_title](const DesktopCapturer::Source& src) {
+                      return src.title.length() && src.title != original_title;
+                    })) {
+      return kCGNullWindowID;
+    }
+
+    MacDesktopConfiguration desktop_config =
+        MacDesktopConfiguration::GetCurrent(
+            MacDesktopConfiguration::TopLeftOrigin);
+
+    // Looking for slide show window,
+    // it must be a full screen window with empty title
+    const auto slide_show_window = std::find_if(
+        cache_sources_.begin(), cache_sources_.end(), [&](const auto& src) {
+          return src.title.empty() &&
+                 IsWindowFullScreen(desktop_config, src.id);
+        });
+
+    if (slide_show_window == cache_sources_.end()) {
+      return kCGNullWindowID;
+    }
+
+    return slide_show_window->id;
+  }
+};
+
 }  // namespace
 
 std::unique_ptr<FullScreenApplicationHandler>
@@ -154,6 +205,7 @@ CreateFullScreenMacApplicationHandler(DesktopCapturer::SourceId sourceId) {
   if (path_length > 0) {
     const char* last_slash = strrchr(buffer, '/');
     const std::string name{last_slash ? last_slash + 1 : buffer};
+    const std::string owner_name = GetWindowOwnerName(sourceId);
     FullScreenMacApplicationHandler::TitlePredicate predicate = nullptr;
     if (name.find("Google Chrome") == 0 || name == "Chromium") {
       predicate = equal_title_predicate;
@@ -161,6 +213,8 @@ CreateFullScreenMacApplicationHandler(DesktopCapturer::SourceId sourceId) {
       predicate = slide_show_title_predicate;
     } else if (name == "Keynote") {
       predicate = equal_title_predicate;
+    } else if (owner_name == "OpenOffice") {
+      return std::make_unique<OpenOfficeApplicationHandler>(sourceId);
     }
 
     if (predicate) {

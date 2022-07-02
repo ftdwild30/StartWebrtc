@@ -9,6 +9,7 @@
  */
 
 #import <OCMock/OCMock.h>
+#import <XCTest/XCTest.h>
 
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
@@ -20,6 +21,7 @@
 #import "components/capturer/RTCCameraVideoCapturer.h"
 #import "helpers/AVCaptureSession+DevicePosition.h"
 #import "helpers/RTCDispatcher.h"
+#import "helpers/scoped_cftyperef.h"
 
 #if TARGET_OS_IPHONE
 // Helper method.
@@ -59,17 +61,19 @@ CMSampleBufferRef createTestSampleBufferRef() {
 
 }
 #endif
-@interface RTCCameraVideoCapturer (Tests)<AVCaptureVideoDataOutputSampleBufferDelegate>
-- (instancetype)initWithDelegate:(__weak id<RTCVideoCapturerDelegate>)delegate
-                  captureSession:(AVCaptureSession *)captureSession;
+@interface RTC_OBJC_TYPE (RTCCameraVideoCapturer)
+(Tests)<AVCaptureVideoDataOutputSampleBufferDelegate> -
+    (instancetype)initWithDelegate
+    : (__weak id<RTC_OBJC_TYPE(RTCVideoCapturerDelegate)>)delegate captureSession
+    : (AVCaptureSession *)captureSession;
 @end
 
-@interface RTCCameraVideoCapturerTests : NSObject
+@interface RTCCameraVideoCapturerTests : XCTestCase
 @property(nonatomic, strong) id delegateMock;
 @property(nonatomic, strong) id deviceMock;
 @property(nonatomic, strong) id captureConnectionMock;
 @property(nonatomic, strong) id captureSessionMock;
-@property(nonatomic, strong) RTCCameraVideoCapturer *capturer;
+@property(nonatomic, strong) RTC_OBJC_TYPE(RTCCameraVideoCapturer) * capturer;
 @end
 
 @implementation RTCCameraVideoCapturerTests
@@ -80,9 +84,10 @@ CMSampleBufferRef createTestSampleBufferRef() {
 @synthesize capturer = _capturer;
 
 - (void)setup {
-  self.delegateMock = OCMProtocolMock(@protocol(RTCVideoCapturerDelegate));
+  self.delegateMock = OCMProtocolMock(@protocol(RTC_OBJC_TYPE(RTCVideoCapturerDelegate)));
   self.captureConnectionMock = OCMClassMock([AVCaptureConnection class]);
-  self.capturer = [[RTCCameraVideoCapturer alloc] initWithDelegate:self.delegateMock];
+  self.capturer =
+      [[RTC_OBJC_TYPE(RTCCameraVideoCapturer) alloc] initWithDelegate:self.delegateMock];
   self.deviceMock = [self createDeviceMock];
 }
 
@@ -94,10 +99,11 @@ CMSampleBufferRef createTestSampleBufferRef() {
   OCMStub([self.captureSessionMock addOutput:[OCMArg any]]);
   OCMStub([self.captureSessionMock beginConfiguration]);
   OCMStub([self.captureSessionMock commitConfiguration]);
-  self.delegateMock = OCMProtocolMock(@protocol(RTCVideoCapturerDelegate));
+  self.delegateMock = OCMProtocolMock(@protocol(RTC_OBJC_TYPE(RTCVideoCapturerDelegate)));
   self.captureConnectionMock = OCMClassMock([AVCaptureConnection class]);
-  self.capturer = [[RTCCameraVideoCapturer alloc] initWithDelegate:self.delegateMock
-                                                    captureSession:self.captureSessionMock];
+  self.capturer =
+      [[RTC_OBJC_TYPE(RTCCameraVideoCapturer) alloc] initWithDelegate:self.delegateMock
+                                                       captureSession:self.captureSessionMock];
   self.deviceMock = [self createDeviceMock];
 }
 
@@ -160,7 +166,8 @@ CMSampleBufferRef createTestSampleBufferRef() {
   OCMStub([self.deviceMock formats]).andReturn(formats);
 
   // when
-  NSArray *supportedFormats = [RTCCameraVideoCapturer supportedFormatsForDevice:self.deviceMock];
+  NSArray *supportedFormats =
+      [RTC_OBJC_TYPE(RTCCameraVideoCapturer) supportedFormatsForDevice:self.deviceMock];
 
   // then
   EXPECT_EQ(supportedFormats.count, 3u);
@@ -199,7 +206,8 @@ CMSampleBufferRef createTestSampleBufferRef() {
 
   // then
   [[self.delegateMock expect] capturer:self.capturer
-                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTCVideoFrame *expectedFrame) {
+                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTC_OBJC_TYPE(RTCVideoFrame) *
+                                                                    expectedFrame) {
                     EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_270);
                     return YES;
                   }]];
@@ -240,22 +248,23 @@ CMSampleBufferRef createTestSampleBufferRef() {
   CMSampleBufferRef sampleBuffer = createTestSampleBufferRef();
 
   [[self.delegateMock expect] capturer:self.capturer
-                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTCVideoFrame *expectedFrame) {
-    if (camera == AVCaptureDevicePositionFront) {
-      if (deviceOrientation == UIDeviceOrientationLandscapeLeft) {
-        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_180);
-      } else if (deviceOrientation == UIDeviceOrientationLandscapeRight) {
-        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
-      }
-    } else if (camera == AVCaptureDevicePositionBack) {
-      if (deviceOrientation == UIDeviceOrientationLandscapeLeft) {
-        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
-      } else if (deviceOrientation == UIDeviceOrientationLandscapeRight) {
-        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_180);
-      }
-    }
-    return YES;
-  }]];
+                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTC_OBJC_TYPE(RTCVideoFrame) *
+                                                                    expectedFrame) {
+                    if (camera == AVCaptureDevicePositionFront) {
+                      if (deviceOrientation == UIDeviceOrientationLandscapeLeft) {
+                        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_180);
+                      } else if (deviceOrientation == UIDeviceOrientationLandscapeRight) {
+                        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
+                      }
+                    } else if (camera == AVCaptureDevicePositionBack) {
+                      if (deviceOrientation == UIDeviceOrientationLandscapeLeft) {
+                        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
+                      } else if (deviceOrientation == UIDeviceOrientationLandscapeRight) {
+                        EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_180);
+                      }
+                    }
+                    return YES;
+                  }]];
 
   NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
   [center postNotificationName:UIDeviceOrientationDidChangeNotification object:nil];
@@ -274,9 +283,10 @@ CMSampleBufferRef createTestSampleBufferRef() {
 }
 
 - (void)setExif:(CMSampleBufferRef)sampleBuffer {
-  CFMutableDictionaryRef exif = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, NULL, NULL);
-  CFDictionarySetValue(exif, CFSTR("LensModel"), CFSTR("iPhone SE back camera 4.15mm f/2.2"));
-  CMSetAttachment(sampleBuffer, CFSTR("{Exif}"), exif, kCMAttachmentMode_ShouldPropagate);
+  rtc::ScopedCFTypeRef<CFMutableDictionaryRef> exif(CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+  CFDictionarySetValue(exif.get(), CFSTR("LensModel"), CFSTR("iPhone SE back camera 4.15mm f/2.2"));
+  CMSetAttachment(sampleBuffer, CFSTR("{Exif}"), exif.get(), kCMAttachmentMode_ShouldPropagate);
 }
 
 - (void)testRotationFrame {
@@ -298,12 +308,13 @@ CMSampleBufferRef createTestSampleBufferRef() {
   CMSampleBufferRef sampleBuffer = createTestSampleBufferRef();
 
   [[self.delegateMock expect] capturer:self.capturer
-                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTCVideoFrame *expectedFrame) {
-    // Front camera and landscape left should return 180. But the frame says its from the back
-    // camera, so rotation should be 0.
-    EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
-    return YES;
-  }]];
+                  didCaptureVideoFrame:[OCMArg checkWithBlock:^BOOL(RTC_OBJC_TYPE(RTCVideoFrame) *
+                                                                    expectedFrame) {
+                    // Front camera and landscape left should return 180. But the frame's exif
+                    // we add below says its from the back camera, so rotation should be 0.
+                    EXPECT_EQ(expectedFrame.rotation, RTCVideoRotation_0);
+                    return YES;
+                  }]];
 
   NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
   [center postNotificationName:UIDeviceOrientationDidChangeNotification object:nil];
@@ -445,112 +456,3 @@ CMSampleBufferRef createTestSampleBufferRef() {
 }
 
 @end
-
-TEST(RTCCameraVideoCapturerTests, SetupSession) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testSetupSession];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, SetupSessionOutput) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testSetupSessionOutput];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, SupportedFormatsForDevice) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testSupportedFormatsForDevice];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, DelegateCallbackNotCalledWhenInvalidBuffer) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testDelegateCallbackNotCalledWhenInvalidBuffer];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, DelegateCallbackWithValidBufferAndOrientationUpdate) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testDelegateCallbackWithValidBufferAndOrientationUpdate];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, RotationCameraBackLandscapeLeft) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testRotationCamera:AVCaptureDevicePositionBack
-           withOrientation:UIDeviceOrientationLandscapeLeft];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, RotationCameraFrontLandscapeLeft) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testRotationCamera:AVCaptureDevicePositionFront
-           withOrientation:UIDeviceOrientationLandscapeLeft];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, RotationCameraBackLandscapeRight) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testRotationCamera:AVCaptureDevicePositionBack
-           withOrientation:UIDeviceOrientationLandscapeRight];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, RotationCameraFrontLandscapeRight) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testRotationCamera:AVCaptureDevicePositionFront
-           withOrientation:UIDeviceOrientationLandscapeRight];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, RotationCameraFrame) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testRotationFrame];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, ImageExif) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setup];
-  [test testImageExif];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, StartAndStopCapture) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setupWithMockedCaptureSession];
-  [test testStartingAndStoppingCapture];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, StartCaptureFailingToLockForConfiguration) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setupWithMockedCaptureSession];
-  [test testStartCaptureFailingToLockForConfiguration];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, StartAndStopCaptureWithCallbacks) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setupWithMockedCaptureSession];
-  [test testStartingAndStoppingCaptureWithCallbacks];
-  [test tearDown];
-}
-
-TEST(RTCCameraVideoCapturerTests, StartCaptureFailingToLockForConfigurationWithCallback) {
-  RTCCameraVideoCapturerTests *test = [[RTCCameraVideoCapturerTests alloc] init];
-  [test setupWithMockedCaptureSession];
-  [test testStartCaptureFailingToLockForConfigurationWithCallback];
-  [test tearDown];
-}

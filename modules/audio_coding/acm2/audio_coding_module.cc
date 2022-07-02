@@ -10,7 +10,6 @@
 
 #include "modules/audio_coding/include/audio_coding_module.h"
 
-#include <assert.h>
 #include <algorithm>
 #include <cstdint>
 
@@ -23,9 +22,9 @@
 #include "modules/include/module_common_types_public.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
-#include "rtc_base/critical_section.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
+#include "rtc_base/synchronization/mutex.h"
 #include "rtc_base/thread_annotations.h"
 #include "system_wrappers/include/metrics.h"
 
@@ -36,6 +35,8 @@ namespace {
 // Initial size for the buffer in InputBuffer. This matches 6 channels of 10 ms
 // 48 kHz data.
 constexpr size_t kInitialInputDataBufferSize = 6 * 480;
+
+constexpr int32_t kMaxInputSampleRateHz = 192000;
 
 class AudioCodingModuleImpl final : public AudioCodingModule {
  public:
@@ -91,6 +92,8 @@ class AudioCodingModuleImpl final : public AudioCodingModule {
 
   ANAStats GetANAStats() const override;
 
+  int GetTargetBitrate() const override;
+
  private:
   struct InputData {
     InputData() : buffer(kInitialInputDataBufferSize) {}
@@ -103,7 +106,7 @@ class AudioCodingModuleImpl final : public AudioCodingModule {
     std::vector<int16_t> buffer;
   };
 
-  InputData input_data_ RTC_GUARDED_BY(acm_crit_sect_);
+  InputData input_data_ RTC_GUARDED_BY(acm_mutex_);
 
   // This member class writes values to the named UMA histogram, but only if
   // the value has changed since the last time (and always for the first call).
@@ -122,64 +125,64 @@ class AudioCodingModuleImpl final : public AudioCodingModule {
   };
 
   int Add10MsDataInternal(const AudioFrame& audio_frame, InputData* input_data)
-      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_crit_sect_);
+      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_mutex_);
 
-  // TODO(bugs.webrtc.org/10739): change |absolute_capture_timestamp_ms| to
+  // TODO(bugs.webrtc.org/10739): change `absolute_capture_timestamp_ms` to
   // int64_t when it always receives a valid value.
   int Encode(const InputData& input_data,
              absl::optional<int64_t> absolute_capture_timestamp_ms)
-      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_crit_sect_);
+      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_mutex_);
 
-  int InitializeReceiverSafe() RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_crit_sect_);
+  int InitializeReceiverSafe() RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_mutex_);
 
   bool HaveValidEncoder(const char* caller_name) const
-      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_crit_sect_);
+      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_mutex_);
 
   // Preprocessing of input audio, including resampling and down-mixing if
   // required, before pushing audio into encoder's buffer.
   //
   // in_frame: input audio-frame
   // ptr_out: pointer to output audio_frame. If no preprocessing is required
-  //          |ptr_out| will be pointing to |in_frame|, otherwise pointing to
-  //          |preprocess_frame_|.
+  //          `ptr_out` will be pointing to `in_frame`, otherwise pointing to
+  //          `preprocess_frame_`.
   //
   // Return value:
   //   -1: if encountering an error.
   //    0: otherwise.
   int PreprocessToAddData(const AudioFrame& in_frame,
                           const AudioFrame** ptr_out)
-      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_crit_sect_);
+      RTC_EXCLUSIVE_LOCKS_REQUIRED(acm_mutex_);
 
   // Change required states after starting to receive the codec corresponding
-  // to |index|.
+  // to `index`.
   int UpdateUponReceivingCodec(int index);
 
-  rtc::CriticalSection acm_crit_sect_;
-  rtc::Buffer encode_buffer_ RTC_GUARDED_BY(acm_crit_sect_);
-  uint32_t expected_codec_ts_ RTC_GUARDED_BY(acm_crit_sect_);
-  uint32_t expected_in_ts_ RTC_GUARDED_BY(acm_crit_sect_);
-  acm2::ACMResampler resampler_ RTC_GUARDED_BY(acm_crit_sect_);
+  mutable Mutex acm_mutex_;
+  rtc::Buffer encode_buffer_ RTC_GUARDED_BY(acm_mutex_);
+  uint32_t expected_codec_ts_ RTC_GUARDED_BY(acm_mutex_);
+  uint32_t expected_in_ts_ RTC_GUARDED_BY(acm_mutex_);
+  acm2::ACMResampler resampler_ RTC_GUARDED_BY(acm_mutex_);
   acm2::AcmReceiver receiver_;  // AcmReceiver has it's own internal lock.
-  ChangeLogger bitrate_logger_ RTC_GUARDED_BY(acm_crit_sect_);
+  ChangeLogger bitrate_logger_ RTC_GUARDED_BY(acm_mutex_);
 
   // Current encoder stack, provided by a call to RegisterEncoder.
-  std::unique_ptr<AudioEncoder> encoder_stack_ RTC_GUARDED_BY(acm_crit_sect_);
+  std::unique_ptr<AudioEncoder> encoder_stack_ RTC_GUARDED_BY(acm_mutex_);
 
   // This is to keep track of CN instances where we can send DTMFs.
-  uint8_t previous_pltype_ RTC_GUARDED_BY(acm_crit_sect_);
+  uint8_t previous_pltype_ RTC_GUARDED_BY(acm_mutex_);
 
-  bool receiver_initialized_ RTC_GUARDED_BY(acm_crit_sect_);
+  bool receiver_initialized_ RTC_GUARDED_BY(acm_mutex_);
 
-  AudioFrame preprocess_frame_ RTC_GUARDED_BY(acm_crit_sect_);
-  bool first_10ms_data_ RTC_GUARDED_BY(acm_crit_sect_);
+  AudioFrame preprocess_frame_ RTC_GUARDED_BY(acm_mutex_);
+  bool first_10ms_data_ RTC_GUARDED_BY(acm_mutex_);
 
-  bool first_frame_ RTC_GUARDED_BY(acm_crit_sect_);
-  uint32_t last_timestamp_ RTC_GUARDED_BY(acm_crit_sect_);
-  uint32_t last_rtp_timestamp_ RTC_GUARDED_BY(acm_crit_sect_);
+  bool first_frame_ RTC_GUARDED_BY(acm_mutex_);
+  uint32_t last_timestamp_ RTC_GUARDED_BY(acm_mutex_);
+  uint32_t last_rtp_timestamp_ RTC_GUARDED_BY(acm_mutex_);
 
-  rtc::CriticalSection callback_crit_sect_;
+  Mutex callback_mutex_;
   AudioPacketizationCallback* packetization_callback_
-      RTC_GUARDED_BY(callback_crit_sect_);
+      RTC_GUARDED_BY(callback_mutex_);
 
   int codec_histogram_bins_log_[static_cast<size_t>(
       AudioEncoder::CodecType::kMaxLoggedAudioCodecTypes)];
@@ -228,7 +231,7 @@ int32_t AudioCodingModuleImpl::Encode(
     const InputData& input_data,
     absl::optional<int64_t> absolute_capture_timestamp_ms) {
   // TODO(bugs.webrtc.org/10739): add dcheck that
-  // |audio_frame.absolute_capture_timestamp_ms()| always has a value.
+  // `audio_frame.absolute_capture_timestamp_ms()` always has a value.
   AudioEncoder::EncodedInfo encoded_info;
   uint8_t previous_pltype;
 
@@ -296,7 +299,7 @@ int32_t AudioCodingModuleImpl::Encode(
   }
 
   {
-    rtc::CritScope lock(&callback_crit_sect_);
+    MutexLock lock(&callback_mutex_);
     if (packetization_callback_) {
       packetization_callback_->SendData(
           frame_type, encoded_info.payload_type, encoded_info.encoded_timestamp,
@@ -314,7 +317,7 @@ int32_t AudioCodingModuleImpl::Encode(
 
 void AudioCodingModuleImpl::ModifyEncoder(
     rtc::FunctionView<void(std::unique_ptr<AudioEncoder>*)> modifier) {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   modifier(&encoder_stack_);
 }
 
@@ -322,17 +325,17 @@ void AudioCodingModuleImpl::ModifyEncoder(
 // the encoded buffers.
 int AudioCodingModuleImpl::RegisterTransportCallback(
     AudioPacketizationCallback* transport) {
-  rtc::CritScope lock(&callback_crit_sect_);
+  MutexLock lock(&callback_mutex_);
   packetization_callback_ = transport;
   return 0;
 }
 
 // Add 10MS of raw (PCM) audio data to the encoder.
 int AudioCodingModuleImpl::Add10MsData(const AudioFrame& audio_frame) {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   int r = Add10MsDataInternal(audio_frame, &input_data_);
   // TODO(bugs.webrtc.org/10739): add dcheck that
-  // |audio_frame.absolute_capture_timestamp_ms()| always has a value.
+  // `audio_frame.absolute_capture_timestamp_ms()` always has a value.
   return r < 0
              ? r
              : Encode(input_data_, audio_frame.absolute_capture_timestamp_ms());
@@ -341,13 +344,13 @@ int AudioCodingModuleImpl::Add10MsData(const AudioFrame& audio_frame) {
 int AudioCodingModuleImpl::Add10MsDataInternal(const AudioFrame& audio_frame,
                                                InputData* input_data) {
   if (audio_frame.samples_per_channel_ == 0) {
-    assert(false);
+    RTC_DCHECK_NOTREACHED();
     RTC_LOG(LS_ERROR) << "Cannot Add 10 ms audio, payload length is zero";
     return -1;
   }
 
-  if (audio_frame.sample_rate_hz_ > 192000) {
-    assert(false);
+  if (audio_frame.sample_rate_hz_ > kMaxInputSampleRateHz) {
+    RTC_DCHECK_NOTREACHED();
     RTC_LOG(LS_ERROR) << "Cannot Add 10 ms audio, input frequency not valid";
     return -1;
   }
@@ -396,7 +399,7 @@ int AudioCodingModuleImpl::Add10MsDataInternal(const AudioFrame& audio_frame,
     // output data if needed.
     ReMixFrame(*ptr_frame, current_num_channels, &input_data->buffer);
 
-    // For pushing data to primary, point the |ptr_audio| to correct buffer.
+    // For pushing data to primary, point the `ptr_audio` to correct buffer.
     input_data->audio = input_data->buffer.data();
     RTC_DCHECK_GE(input_data->buffer.size(),
                   input_data->length_per_channel * input_data->audio_channel);
@@ -413,7 +416,7 @@ int AudioCodingModuleImpl::Add10MsDataInternal(const AudioFrame& audio_frame,
 // encoder is mono and input is stereo. In case of dual-streaming, both
 // encoders has to be mono for down-mix to take place.
 // |*ptr_out| will point to the pre-processed audio-frame. If no pre-processing
-// is required, |*ptr_out| points to |in_frame|.
+// is required, |*ptr_out| points to `in_frame`.
 // TODO(yujo): Make this more efficient for muted frames.
 int AudioCodingModuleImpl::PreprocessToAddData(const AudioFrame& in_frame,
                                                const AudioFrame** ptr_out) {
@@ -463,20 +466,25 @@ int AudioCodingModuleImpl::PreprocessToAddData(const AudioFrame& in_frame,
   *ptr_out = &preprocess_frame_;
   preprocess_frame_.num_channels_ = in_frame.num_channels_;
   preprocess_frame_.samples_per_channel_ = in_frame.samples_per_channel_;
-  std::array<int16_t, WEBRTC_10MS_PCM_AUDIO> audio;
-  const int16_t* src_ptr_audio = in_frame.data();
+  std::array<int16_t, AudioFrame::kMaxDataSizeSamples> audio;
+  const int16_t* src_ptr_audio;
   if (down_mix) {
-    // If a resampling is required the output of a down-mix is written into a
+    // If a resampling is required, the output of a down-mix is written into a
     // local buffer, otherwise, it will be written to the output frame.
     int16_t* dest_ptr_audio =
         resample ? audio.data() : preprocess_frame_.mutable_data();
+    RTC_DCHECK_GE(audio.size(), preprocess_frame_.samples_per_channel_);
     RTC_DCHECK_GE(audio.size(), in_frame.samples_per_channel_);
     DownMixFrame(in_frame,
                  rtc::ArrayView<int16_t>(
                      dest_ptr_audio, preprocess_frame_.samples_per_channel_));
     preprocess_frame_.num_channels_ = 1;
-    // Set the input of the resampler is the down-mixed signal.
+
+    // Set the input of the resampler to the down-mixed signal.
     src_ptr_audio = audio.data();
+  } else {
+    // Set the input of the resampler to the original data.
+    src_ptr_audio = in_frame.data();
   }
 
   preprocess_frame_.timestamp_ = expected_codec_ts_;
@@ -512,7 +520,7 @@ int AudioCodingModuleImpl::PreprocessToAddData(const AudioFrame& in_frame,
 //
 
 int AudioCodingModuleImpl::SetPacketLossRate(int loss_rate) {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   if (HaveValidEncoder("SetPacketLossRate")) {
     encoder_stack_->OnReceivedUplinkPacketLossFraction(loss_rate / 100.0);
   }
@@ -524,7 +532,7 @@ int AudioCodingModuleImpl::SetPacketLossRate(int loss_rate) {
 //
 
 int AudioCodingModuleImpl::InitializeReceiver() {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   return InitializeReceiverSafe();
 }
 
@@ -543,7 +551,7 @@ int AudioCodingModuleImpl::InitializeReceiverSafe() {
 
 void AudioCodingModuleImpl::SetReceiveCodecs(
     const std::map<int, SdpAudioFormat>& codecs) {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   receiver_.SetCodecs(codecs);
 }
 
@@ -590,11 +598,19 @@ bool AudioCodingModuleImpl::HaveValidEncoder(const char* caller_name) const {
 }
 
 ANAStats AudioCodingModuleImpl::GetANAStats() const {
-  rtc::CritScope lock(&acm_crit_sect_);
+  MutexLock lock(&acm_mutex_);
   if (encoder_stack_)
     return encoder_stack_->GetANAStats();
   // If no encoder is set, return default stats.
   return ANAStats();
+}
+
+int AudioCodingModuleImpl::GetTargetBitrate() const {
+  MutexLock lock(&acm_mutex_);
+  if (!encoder_stack_) {
+    return -1;
+  }
+  return encoder_stack_->GetTargetBitrate();
 }
 
 }  // namespace

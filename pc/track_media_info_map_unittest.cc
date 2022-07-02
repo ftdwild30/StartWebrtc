@@ -10,21 +10,27 @@
 
 #include "pc/track_media_info_map.h"
 
+#include <stddef.h>
+
+#include <cstdint>
 #include <initializer_list>
-#include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "api/rtp_sender_interface.h"
-#include "api/transport/rtp/rtp_source.h"
+#include "api/media_types.h"
+#include "api/rtp_parameters.h"
+#include "api/test/mock_video_track.h"
 #include "media/base/media_channel.h"
 #include "pc/audio_track.h"
 #include "pc/test/fake_video_track_source.h"
 #include "pc/test/mock_rtp_receiver_internal.h"
 #include "pc/test/mock_rtp_sender_internal.h"
 #include "pc/video_track.h"
-#include "rtc_base/ref_count.h"
+#include "rtc_base/checks.h"
+#include "rtc_base/thread.h"
+#include "test/gmock.h"
 #include "test/gtest.h"
 
 namespace webrtc {
@@ -52,8 +58,7 @@ rtc::scoped_refptr<MockRtpSenderInternal> CreateMockRtpSender(
   } else {
     first_ssrc = 0;
   }
-  rtc::scoped_refptr<MockRtpSenderInternal> sender(
-      new rtc::RefCountedObject<MockRtpSenderInternal>());
+  auto sender = rtc::make_ref_counted<MockRtpSenderInternal>();
   EXPECT_CALL(*sender, track())
       .WillRepeatedly(::testing::Return(std::move(track)));
   EXPECT_CALL(*sender, ssrc()).WillRepeatedly(::testing::Return(first_ssrc));
@@ -69,8 +74,7 @@ rtc::scoped_refptr<MockRtpReceiverInternal> CreateMockRtpReceiver(
     cricket::MediaType media_type,
     std::initializer_list<uint32_t> ssrcs,
     rtc::scoped_refptr<MediaStreamTrackInterface> track) {
-  rtc::scoped_refptr<MockRtpReceiverInternal> receiver(
-      new rtc::RefCountedObject<MockRtpReceiverInternal>());
+  auto receiver = rtc::make_ref_counted<MockRtpReceiverInternal>();
   EXPECT_CALL(*receiver, track())
       .WillRepeatedly(::testing::Return(std::move(track)));
   EXPECT_CALL(*receiver, media_type())
@@ -81,25 +85,39 @@ rtc::scoped_refptr<MockRtpReceiverInternal> CreateMockRtpReceiver(
   return receiver;
 }
 
+rtc::scoped_refptr<VideoTrackInterface> CreateVideoTrack(
+    const std::string& id) {
+  return VideoTrack::Create(id, FakeVideoTrackSource::Create(false),
+                            rtc::Thread::Current());
+}
+
+rtc::scoped_refptr<VideoTrackInterface> CreateMockVideoTrack(
+    const std::string& id) {
+  auto track = MockVideoTrack::Create();
+  EXPECT_CALL(*track, kind())
+      .WillRepeatedly(::testing::Return(VideoTrack::kVideoKind));
+  return track;
+}
+
 class TrackMediaInfoMapTest : public ::testing::Test {
  public:
-  TrackMediaInfoMapTest()
+  TrackMediaInfoMapTest() : TrackMediaInfoMapTest(true) {}
+
+  explicit TrackMediaInfoMapTest(bool use_real_video_track)
       : voice_media_info_(new cricket::VoiceMediaInfo()),
         video_media_info_(new cricket::VideoMediaInfo()),
         local_audio_track_(AudioTrack::Create("LocalAudioTrack", nullptr)),
         remote_audio_track_(AudioTrack::Create("RemoteAudioTrack", nullptr)),
-        local_video_track_(
-            VideoTrack::Create("LocalVideoTrack",
-                               FakeVideoTrackSource::Create(false),
-                               rtc::Thread::Current())),
-        remote_video_track_(
-            VideoTrack::Create("RemoteVideoTrack",
-                               FakeVideoTrackSource::Create(false),
-                               rtc::Thread::Current())) {}
+        local_video_track_(use_real_video_track
+                               ? CreateVideoTrack("LocalVideoTrack")
+                               : CreateMockVideoTrack("LocalVideoTrack")),
+        remote_video_track_(use_real_video_track
+                                ? CreateVideoTrack("RemoteVideoTrack")
+                                : CreateMockVideoTrack("LocalVideoTrack")) {}
 
   ~TrackMediaInfoMapTest() {
     // If we have a map the ownership has been passed to the map, only delete if
-    // |CreateMap| has not been called.
+    // `CreateMap` has not been called.
     if (!map_) {
       delete voice_media_info_;
       delete video_media_info_;
@@ -112,7 +130,7 @@ class TrackMediaInfoMapTest : public ::testing::Test {
         local_track->kind() == MediaStreamTrackInterface::kAudioKind
             ? cricket::MEDIA_TYPE_AUDIO
             : cricket::MEDIA_TYPE_VIDEO,
-        ssrcs, local_track);
+        ssrcs, rtc::scoped_refptr<MediaStreamTrackInterface>(local_track));
     rtp_senders_.push_back(rtp_sender);
 
     if (local_track->kind() == MediaStreamTrackInterface::kAudioKind) {
@@ -131,6 +149,7 @@ class TrackMediaInfoMapTest : public ::testing::Test {
         video_sender_info.local_stats[i++].ssrc = ssrc;
       }
       video_media_info_->senders.push_back(video_sender_info);
+      video_media_info_->aggregated_senders.push_back(video_sender_info);
     }
   }
 
@@ -140,7 +159,7 @@ class TrackMediaInfoMapTest : public ::testing::Test {
         remote_track->kind() == MediaStreamTrackInterface::kAudioKind
             ? cricket::MEDIA_TYPE_AUDIO
             : cricket::MEDIA_TYPE_VIDEO,
-        ssrcs, remote_track);
+        ssrcs, rtc::scoped_refptr<MediaStreamTrackInterface>(remote_track));
     rtp_receivers_.push_back(rtp_receiver);
 
     if (remote_track->kind() == MediaStreamTrackInterface::kAudioKind) {
@@ -171,6 +190,7 @@ class TrackMediaInfoMapTest : public ::testing::Test {
   }
 
  protected:
+  rtc::AutoThread main_thread_;
   cricket::VoiceMediaInfo* voice_media_info_;
   cricket::VideoMediaInfo* video_media_info_;
   std::vector<rtc::scoped_refptr<RtpSenderInternal>> rtp_senders_;
@@ -178,17 +198,17 @@ class TrackMediaInfoMapTest : public ::testing::Test {
   std::unique_ptr<TrackMediaInfoMap> map_;
   rtc::scoped_refptr<AudioTrack> local_audio_track_;
   rtc::scoped_refptr<AudioTrack> remote_audio_track_;
-  rtc::scoped_refptr<VideoTrack> local_video_track_;
-  rtc::scoped_refptr<VideoTrack> remote_video_track_;
+  rtc::scoped_refptr<VideoTrackInterface> local_video_track_;
+  rtc::scoped_refptr<VideoTrackInterface> remote_video_track_;
 };
 
 }  // namespace
 
 TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithOneSsrc) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_audio_track_);
-  AddRtpSenderWithSsrcs({3}, local_video_track_);
-  AddRtpReceiverWithSsrcs({4}, remote_video_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_audio_track_.get());
+  AddRtpSenderWithSsrcs({3}, local_video_track_.get());
+  AddRtpReceiverWithSsrcs({4}, remote_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio sender
@@ -221,10 +241,10 @@ TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithOneSsrc) {
 }
 
 TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithMissingSsrc) {
-  AddRtpSenderWithSsrcs({}, local_audio_track_);
-  AddRtpSenderWithSsrcs({}, local_video_track_);
-  AddRtpReceiverWithSsrcs({}, remote_audio_track_);
-  AddRtpReceiverWithSsrcs({}, remote_video_track_);
+  AddRtpSenderWithSsrcs({}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({}, local_video_track_.get());
+  AddRtpReceiverWithSsrcs({}, remote_audio_track_.get());
+  AddRtpReceiverWithSsrcs({}, remote_video_track_.get());
   CreateMap();
 
   EXPECT_FALSE(map_->GetVoiceSenderInfos(*local_audio_track_));
@@ -235,10 +255,10 @@ TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithMissingSsrc) {
 
 TEST_F(TrackMediaInfoMapTest,
        SingleSenderReceiverPerTrackWithAudioAndVideoUseSameSsrc) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_audio_track_);
-  AddRtpSenderWithSsrcs({1}, local_video_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_video_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_audio_track_.get());
+  AddRtpSenderWithSsrcs({1}, local_video_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio sender
@@ -271,8 +291,8 @@ TEST_F(TrackMediaInfoMapTest,
 }
 
 TEST_F(TrackMediaInfoMapTest, SingleMultiSsrcSenderPerTrack) {
-  AddRtpSenderWithSsrcs({1, 2}, local_audio_track_);
-  AddRtpSenderWithSsrcs({3, 4}, local_video_track_);
+  AddRtpSenderWithSsrcs({1, 2}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({3, 4}, local_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio senders
@@ -293,10 +313,10 @@ TEST_F(TrackMediaInfoMapTest, SingleMultiSsrcSenderPerTrack) {
 }
 
 TEST_F(TrackMediaInfoMapTest, MultipleOneSsrcSendersPerTrack) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
-  AddRtpSenderWithSsrcs({2}, local_audio_track_);
-  AddRtpSenderWithSsrcs({3}, local_video_track_);
-  AddRtpSenderWithSsrcs({4}, local_video_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({2}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({3}, local_video_track_.get());
+  AddRtpSenderWithSsrcs({4}, local_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio senders
@@ -323,10 +343,10 @@ TEST_F(TrackMediaInfoMapTest, MultipleOneSsrcSendersPerTrack) {
 }
 
 TEST_F(TrackMediaInfoMapTest, MultipleMultiSsrcSendersPerTrack) {
-  AddRtpSenderWithSsrcs({1, 2}, local_audio_track_);
-  AddRtpSenderWithSsrcs({3, 4}, local_audio_track_);
-  AddRtpSenderWithSsrcs({5, 6}, local_video_track_);
-  AddRtpSenderWithSsrcs({7, 8}, local_video_track_);
+  AddRtpSenderWithSsrcs({1, 2}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({3, 4}, local_audio_track_.get());
+  AddRtpSenderWithSsrcs({5, 6}, local_video_track_.get());
+  AddRtpSenderWithSsrcs({7, 8}, local_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio senders
@@ -354,10 +374,10 @@ TEST_F(TrackMediaInfoMapTest, MultipleMultiSsrcSendersPerTrack) {
 
 // SSRCs can be reused for send and receive in loopback.
 TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithSsrcNotUnique) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
-  AddRtpReceiverWithSsrcs({1}, remote_audio_track_);
-  AddRtpSenderWithSsrcs({2}, local_video_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_video_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
+  AddRtpReceiverWithSsrcs({1}, remote_audio_track_.get());
+  AddRtpSenderWithSsrcs({2}, local_video_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_video_track_.get());
   CreateMap();
 
   // Local audio track <-> RTP audio senders
@@ -390,10 +410,10 @@ TEST_F(TrackMediaInfoMapTest, SingleSenderReceiverPerTrackWithSsrcNotUnique) {
 }
 
 TEST_F(TrackMediaInfoMapTest, SsrcLookupFunction) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_audio_track_);
-  AddRtpSenderWithSsrcs({3}, local_video_track_);
-  AddRtpReceiverWithSsrcs({4}, remote_video_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_audio_track_.get());
+  AddRtpSenderWithSsrcs({3}, local_video_track_.get());
+  AddRtpReceiverWithSsrcs({4}, remote_video_track_.get());
   CreateMap();
   EXPECT_TRUE(map_->GetVoiceSenderInfoBySsrc(1));
   EXPECT_TRUE(map_->GetVoiceReceiverInfoBySsrc(2));
@@ -404,11 +424,12 @@ TEST_F(TrackMediaInfoMapTest, SsrcLookupFunction) {
 }
 
 TEST_F(TrackMediaInfoMapTest, GetAttachmentIdByTrack) {
-  AddRtpSenderWithSsrcs({1}, local_audio_track_);
+  AddRtpSenderWithSsrcs({1}, local_audio_track_.get());
   CreateMap();
   EXPECT_EQ(rtp_senders_[0]->AttachmentId(),
-            map_->GetAttachmentIdByTrack(local_audio_track_));
-  EXPECT_EQ(absl::nullopt, map_->GetAttachmentIdByTrack(local_video_track_));
+            map_->GetAttachmentIdByTrack(local_audio_track_.get()));
+  EXPECT_EQ(absl::nullopt,
+            map_->GetAttachmentIdByTrack(local_video_track_.get()));
 }
 
 // Death tests.
@@ -416,21 +437,24 @@ TEST_F(TrackMediaInfoMapTest, GetAttachmentIdByTrack) {
 // base/test/gtest_util.h.
 #if RTC_DCHECK_IS_ON && GTEST_HAS_DEATH_TEST && !defined(WEBRTC_ANDROID)
 
-class TrackMediaInfoMapDeathTest : public TrackMediaInfoMapTest {};
+class TrackMediaInfoMapDeathTest : public TrackMediaInfoMapTest {
+ public:
+  TrackMediaInfoMapDeathTest() : TrackMediaInfoMapTest(false) {}
+};
 
 TEST_F(TrackMediaInfoMapDeathTest, MultipleOneSsrcReceiversPerTrack) {
-  AddRtpReceiverWithSsrcs({1}, remote_audio_track_);
-  AddRtpReceiverWithSsrcs({2}, remote_audio_track_);
-  AddRtpReceiverWithSsrcs({3}, remote_video_track_);
-  AddRtpReceiverWithSsrcs({4}, remote_video_track_);
+  AddRtpReceiverWithSsrcs({1}, remote_audio_track_.get());
+  AddRtpReceiverWithSsrcs({2}, remote_audio_track_.get());
+  AddRtpReceiverWithSsrcs({3}, remote_video_track_.get());
+  AddRtpReceiverWithSsrcs({4}, remote_video_track_.get());
   EXPECT_DEATH(CreateMap(), "");
 }
 
 TEST_F(TrackMediaInfoMapDeathTest, MultipleMultiSsrcReceiversPerTrack) {
-  AddRtpReceiverWithSsrcs({1, 2}, remote_audio_track_);
-  AddRtpReceiverWithSsrcs({3, 4}, remote_audio_track_);
-  AddRtpReceiverWithSsrcs({5, 6}, remote_video_track_);
-  AddRtpReceiverWithSsrcs({7, 8}, remote_video_track_);
+  AddRtpReceiverWithSsrcs({1, 2}, remote_audio_track_.get());
+  AddRtpReceiverWithSsrcs({3, 4}, remote_audio_track_.get());
+  AddRtpReceiverWithSsrcs({5, 6}, remote_video_track_.get());
+  AddRtpReceiverWithSsrcs({7, 8}, remote_video_track_.get());
   EXPECT_DEATH(CreateMap(), "");
 }
 

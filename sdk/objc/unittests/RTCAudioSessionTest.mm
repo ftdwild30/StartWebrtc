@@ -10,9 +10,11 @@
 
 #import <Foundation/Foundation.h>
 #import <OCMock/OCMock.h>
+#import <XCTest/XCTest.h>
 
 #include <vector>
 
+#include "rtc_base/event.h"
 #include "rtc_base/gunit.h"
 
 #import "components/audio/RTCAudioSession+Private.h"
@@ -20,9 +22,11 @@
 #import "components/audio/RTCAudioSession.h"
 #import "components/audio/RTCAudioSessionConfiguration.h"
 
-@interface RTCAudioSession (UnitTesting)
+@interface RTC_OBJC_TYPE (RTCAudioSession)
+(UnitTesting)
 
-@property(nonatomic, readonly) std::vector<__weak id<RTCAudioSessionDelegate> > delegates;
+    @property(nonatomic,
+              readonly) std::vector<__weak id<RTC_OBJC_TYPE(RTCAudioSessionDelegate)> > delegates;
 
 - (instancetype)initWithAudioSession:(id)audioSession;
 
@@ -38,7 +42,7 @@
 @synthesize outputVolume = _outputVolume;
 @end
 
-@interface RTCAudioSessionTestDelegate : NSObject <RTCAudioSessionDelegate>
+@interface RTCAudioSessionTestDelegate : NSObject <RTC_OBJC_TYPE (RTCAudioSessionDelegate)>
 
 @property (nonatomic, readonly) float outputVolume;
 
@@ -55,31 +59,31 @@
   return self;
 }
 
-- (void)audioSessionDidBeginInterruption:(RTCAudioSession *)session {
+- (void)audioSessionDidBeginInterruption:(RTC_OBJC_TYPE(RTCAudioSession) *)session {
 }
 
-- (void)audioSessionDidEndInterruption:(RTCAudioSession *)session
+- (void)audioSessionDidEndInterruption:(RTC_OBJC_TYPE(RTCAudioSession) *)session
                    shouldResumeSession:(BOOL)shouldResumeSession {
 }
 
-- (void)audioSessionDidChangeRoute:(RTCAudioSession *)session
-           reason:(AVAudioSessionRouteChangeReason)reason
-    previousRoute:(AVAudioSessionRouteDescription *)previousRoute {
+- (void)audioSessionDidChangeRoute:(RTC_OBJC_TYPE(RTCAudioSession) *)session
+                            reason:(AVAudioSessionRouteChangeReason)reason
+                     previousRoute:(AVAudioSessionRouteDescription *)previousRoute {
 }
 
-- (void)audioSessionMediaServerTerminated:(RTCAudioSession *)session {
+- (void)audioSessionMediaServerTerminated:(RTC_OBJC_TYPE(RTCAudioSession) *)session {
 }
 
-- (void)audioSessionMediaServerReset:(RTCAudioSession *)session {
+- (void)audioSessionMediaServerReset:(RTC_OBJC_TYPE(RTCAudioSession) *)session {
 }
 
-- (void)audioSessionShouldConfigure:(RTCAudioSession *)session {
+- (void)audioSessionShouldConfigure:(RTC_OBJC_TYPE(RTCAudioSession) *)session {
 }
 
-- (void)audioSessionShouldUnconfigure:(RTCAudioSession *)session {
+- (void)audioSessionShouldUnconfigure:(RTC_OBJC_TYPE(RTCAudioSession) *)session {
 }
 
-- (void)audioSession:(RTCAudioSession *)audioSession
+- (void)audioSession:(RTC_OBJC_TYPE(RTCAudioSession) *)audioSession
     didChangeOutputVolume:(float)outputVolume {
   _outputVolume = outputVolume;
 }
@@ -95,44 +99,27 @@
 
 - (instancetype)init {
   if (self = [super init]) {
-    RTCAudioSession *session = [RTCAudioSession sharedInstance];
+    RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
     [session addDelegate:self];
   }
   return self;
 }
 
 - (void)dealloc {
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   [session removeDelegate:self];
 }
 
 @end
 
-
-@interface RTCAudioSessionTest : NSObject
-
-- (void)testLockForConfiguration;
+@interface RTCAudioSessionTest : XCTestCase
 
 @end
 
 @implementation RTCAudioSessionTest
 
-- (void)testLockForConfiguration {
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
-
-  for (size_t i = 0; i < 2; i++) {
-    [session lockForConfiguration];
-    EXPECT_TRUE(session.isLocked);
-  }
-  for (size_t i = 0; i < 2; i++) {
-    EXPECT_TRUE(session.isLocked);
-    [session unlockForConfiguration];
-  }
-  EXPECT_FALSE(session.isLocked);
-}
-
 - (void)testAddAndRemoveDelegates {
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   NSMutableArray *delegates = [NSMutableArray array];
   const size_t count = 5;
   for (size_t i = 0; i < count; ++i) {
@@ -151,7 +138,7 @@
 }
 
 - (void)testPushDelegate {
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   NSMutableArray *delegates = [NSMutableArray array];
   const size_t count = 2;
   for (size_t i = 0; i < count; ++i) {
@@ -184,7 +171,7 @@
 // Tests that delegates added to the audio session properly zero out. This is
 // checking an implementation detail (that vectors of __weak work as expected).
 - (void)testZeroingWeakDelegate {
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   @autoreleasepool {
     // Add a delegate to the session. There should be one delegate at this
     // point.
@@ -212,12 +199,12 @@
         [[RTCTestRemoveOnDeallocDelegate alloc] init];
     EXPECT_TRUE(delegate);
   }
-  RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   EXPECT_EQ(0u, session.delegates.size());
 }
 
 - (void)testAudioSessionActivation {
-  RTCAudioSession *audioSession = [RTCAudioSession sharedInstance];
+  RTC_OBJC_TYPE(RTCAudioSession) *audioSession = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   EXPECT_EQ(0, audioSession.activationCount);
   [audioSession audioSessionDidActivate:[AVAudioSession sharedInstance]];
   EXPECT_EQ(1, audioSession.activationCount);
@@ -244,29 +231,30 @@ OCMLocation *OCMMakeLocation(id testCase, const char *fileCString, int line){
     __autoreleasing NSError **retError;
     [invocation getArgument:&retError atIndex:4];
     *retError = [NSError errorWithDomain:@"AVAudioSession"
-                                    code:AVAudioSessionErrorInsufficientPriority
+                                    code:AVAudioSessionErrorCodeCannotInterruptOthers
                                 userInfo:nil];
     BOOL failure = NO;
     [invocation setReturnValue:&failure];
   };
 
   id mockAVAudioSession = OCMPartialMock([AVAudioSession sharedInstance]);
-  OCMStub([[mockAVAudioSession ignoringNonObjectArgs]
-      setActive:YES withOptions:0 error:((NSError __autoreleasing **)[OCMArg anyPointer])]).
-      andDo(setActiveBlock);
+  OCMStub([[mockAVAudioSession ignoringNonObjectArgs] setActive:YES
+                                                    withOptions:0
+                                                          error:([OCMArg anyObjectRef])])
+      .andDo(setActiveBlock);
 
-  id mockAudioSession = OCMPartialMock([RTCAudioSession sharedInstance]);
+  id mockAudioSession = OCMPartialMock([RTC_OBJC_TYPE(RTCAudioSession) sharedInstance]);
   OCMStub([mockAudioSession session]).andReturn(mockAVAudioSession);
 
-  RTCAudioSession *audioSession = mockAudioSession;
+  RTC_OBJC_TYPE(RTCAudioSession) *audioSession = mockAudioSession;
   EXPECT_EQ(0, audioSession.activationCount);
   [audioSession lockForConfiguration];
-  EXPECT_TRUE([audioSession checkLock:nil]);
   // configureWebRTCSession is forced to fail in the above mock interface,
   // so activationCount should remain 0
-  OCMExpect([[mockAVAudioSession ignoringNonObjectArgs]
-      setActive:YES withOptions:0 error:((NSError __autoreleasing **)[OCMArg anyPointer])]).
-      andDo(setActiveBlock);
+  OCMExpect([[mockAVAudioSession ignoringNonObjectArgs] setActive:YES
+                                                      withOptions:0
+                                                            error:([OCMArg anyObjectRef])])
+      .andDo(setActiveBlock);
   OCMExpect([mockAudioSession session]).andReturn(mockAVAudioSession);
   EXPECT_FALSE([audioSession configureWebRTCSession:&error]);
   EXPECT_EQ(0, audioSession.activationCount);
@@ -284,9 +272,45 @@ OCMLocation *OCMMakeLocation(id testCase, const char *fileCString, int line){
   [mockAudioSession stopMocking];
 }
 
+- (void)testConfigureWebRTCSessionWithoutLocking {
+  NSError *error = nil;
+
+  id mockAVAudioSession = OCMPartialMock([AVAudioSession sharedInstance]);
+  id mockAudioSession = OCMPartialMock([RTC_OBJC_TYPE(RTCAudioSession) sharedInstance]);
+  OCMStub([mockAudioSession session]).andReturn(mockAVAudioSession);
+
+  RTC_OBJC_TYPE(RTCAudioSession) *audioSession = mockAudioSession;
+
+  std::unique_ptr<rtc::Thread> thread = rtc::Thread::Create();
+  EXPECT_TRUE(thread);
+  EXPECT_TRUE(thread->Start());
+
+  rtc::Event waitLock;
+  rtc::Event waitCleanup;
+  constexpr int timeoutMs = 5000;
+  thread->PostTask([audioSession, &waitLock, &waitCleanup] {
+    [audioSession lockForConfiguration];
+    waitLock.Set();
+    waitCleanup.Wait(timeoutMs);
+    [audioSession unlockForConfiguration];
+  });
+
+  waitLock.Wait(timeoutMs);
+  [audioSession setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:0 error:&error];
+  EXPECT_TRUE(error != nil);
+  EXPECT_EQ(error.domain, kRTCAudioSessionErrorDomain);
+  EXPECT_EQ(error.code, kRTCAudioSessionErrorLockRequired);
+  waitCleanup.Set();
+  thread->Stop();
+
+  [mockAVAudioSession stopMocking];
+  [mockAudioSession stopMocking];
+}
+
 - (void)testAudioVolumeDidNotify {
   MockAVAudioSession *mockAVAudioSession = [[MockAVAudioSession alloc] init];
-  RTCAudioSession *session = [[RTCAudioSession alloc] initWithAudioSession:mockAVAudioSession];
+  RTC_OBJC_TYPE(RTCAudioSession) *session =
+      [[RTC_OBJC_TYPE(RTCAudioSession) alloc] initWithAudioSession:mockAVAudioSession];
   RTCAudioSessionTestDelegate *delegate =
       [[RTCAudioSessionTestDelegate alloc] init];
   [session addDelegate:delegate];
@@ -298,57 +322,3 @@ OCMLocation *OCMMakeLocation(id testCase, const char *fileCString, int line){
 }
 
 @end
-
-namespace webrtc {
-
-class AudioSessionTest : public ::testing::Test {
- protected:
-  void TearDown() override {
-    RTCAudioSession *session = [RTCAudioSession sharedInstance];
-    for (id<RTCAudioSessionDelegate> delegate : session.delegates) {
-      [session removeDelegate:delegate];
-    }
-  }
-};
-
-TEST_F(AudioSessionTest, LockForConfiguration) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testLockForConfiguration];
-}
-
-TEST_F(AudioSessionTest, AddAndRemoveDelegates) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testAddAndRemoveDelegates];
-}
-
-TEST_F(AudioSessionTest, PushDelegate) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testPushDelegate];
-}
-
-TEST_F(AudioSessionTest, ZeroingWeakDelegate) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testZeroingWeakDelegate];
-}
-
-TEST_F(AudioSessionTest, RemoveDelegateOnDealloc) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testRemoveDelegateOnDealloc];
-}
-
-TEST_F(AudioSessionTest, AudioSessionActivation) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testAudioSessionActivation];
-}
-
-TEST_F(AudioSessionTest, ConfigureWebRTCSession) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testConfigureWebRTCSession];
-}
-
-TEST_F(AudioSessionTest, AudioVolumeDidNotify) {
-  RTCAudioSessionTest *test = [[RTCAudioSessionTest alloc] init];
-  [test testAudioVolumeDidNotify];
-}
-
-}  // namespace webrtc
