@@ -64,9 +64,10 @@ file(GLOB_RECURSE MODULES_PACING_SOURCE_FILES
 #message("=== modules pacing files=${MODULES_PACING_SOURCE_FILES}")
 
 ## modules/rtp_rtcp
-file(GLOB_RECURSE MODULES_RTP_RTCP_SOURCE_FILES
-        ${WEBRTC_CURRENT_DIR}/modules/rtp_rtcp/source/*.cc)
-#message("=== modules rtp_rtcp files=${MODULES_RTP_RTCP_SOURCE_FILES}")
+file(GLOB_RECURSE MODULES_SOURCE_FILES
+        ${WEBRTC_CURRENT_DIR}/modules/rtp_rtcp/source/*.cc
+        ${WEBRTC_CURRENT_DIR}/modules/video_coding/*.cc)
+#message("=== modules rtp_rtcp files=${MODULES_SOURCE_FILES}")
 
 #######################
 set(WEBRTC_ALL_FILE ${API_SOURCE_FILES}
@@ -78,7 +79,7 @@ set(WEBRTC_ALL_FILE ${API_SOURCE_FILES}
         ${SYSTEM_WRAPPERS_SOURCE_FILES}
         ${VIDEO_SOURCE_FILES}
         ${MODULES_PACING_SOURCE_FILES}
-        ${MODULES_RTP_RTCP_SOURCE_FILES})
+        ${MODULES_SOURCE_FILES})
 
 
 ####################### 以下是为了编译webrtc动态库需要额外编译的源文件。
